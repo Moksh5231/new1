@@ -1,0 +1,258 @@
+pojo:
+----
+package com.aetna.clinical.pojo.task;
+
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonInclude.Include;
+import com.fasterxml.jackson.annotation.JsonUnwrapped;
+import java.util.List;
+import java.util.Map;
+
+@JsonInclude(Include.NON_NULL)
+public class ShjCompositeResponseForTask {
+
+    private List<CompositeResponse> compositeResponse;
+
+    public List<CompositeResponse> getCompositeResponse() {
+        return compositeResponse;
+    }
+
+    public void setCompositeResponse(List<CompositeResponse> compositeResponse) {
+        this.compositeResponse = compositeResponse;
+    }
+
+    @JsonInclude(Include.NON_NULL)
+    public static class CompositeResponse {
+        @JsonUnwrapped
+        private Body body;
+        private List<Body> bodies; // Add this to handle array case
+        private Map<String, String> httpHeaders;
+        private int httpStatusCode;
+        private String referenceId;
+
+        public Body getBody() {
+            if (body != null) {
+                return body;
+            }
+            if (bodies != null && !bodies.isEmpty()) {
+                return bodies.get(0); // Return first element if it's an array
+            }
+            return null;
+        }
+
+        public void setBody(Body body) {
+            this.body = body;
+        }
+
+        public List<Body> getBodies() {
+            return bodies;
+        }
+
+        public void setBodies(List<Body> bodies) {
+            this.bodies = bodies;
+        }
+
+        public Map<String, String> getHttpHeaders() {
+            return httpHeaders;
+        }
+
+        public void setHttpHeaders(Map<String, String> httpHeaders) {
+            this.httpHeaders = httpHeaders;
+        }
+
+        public int getHttpStatusCode() {
+            return httpStatusCode;
+        }
+
+        public void setHttpStatusCode(int httpStatusCode) {
+            this.httpStatusCode = httpStatusCode;
+        }
+
+        public String getReferenceId() {
+            return referenceId;
+        }
+
+        public void setReferenceId(String referenceId) {
+            this.referenceId = referenceId;
+        }
+    }
+
+    @JsonInclude(Include.NON_NULL)
+    public static class Body {
+        private int totalSize;
+        private boolean done;
+        private List<Record> records;
+        private String id;
+        private boolean success;
+        private List<Error> errors;
+        private boolean created;
+
+        public int getTotalSize() {
+            return totalSize;
+        }
+
+        public void setTotalSize(int totalSize) {
+            this.totalSize = totalSize;
+        }
+
+        public boolean isDone() {
+            return done;
+        }
+
+        public void setDone(boolean done) {
+            this.done = done;
+        }
+
+        public List<Record> getRecords() {
+            return records;
+        }
+
+        public void setRecords(List<Record> records) {
+            this.records = records;
+        }
+
+        public String getId() {
+            return id;
+        }
+
+        public void setId(String id) {
+            this.id = id;
+        }
+
+        public boolean isSuccess() {
+            return success;
+        }
+
+        public void setSuccess(boolean success) {
+            this.success = success;
+        }
+
+        public List<Error> getErrors() {
+            return errors;
+        }
+
+        public void setErrors(List<Error> errors) {
+            this.errors = errors;
+        }
+
+        public boolean isCreated() {
+            return created;
+        }
+
+        public void setCreated(boolean created) {
+            this.created = created;
+        }
+    }
+
+    public static class Record {
+        private Attributes attributes;
+
+        @JsonProperty("Id")
+        private String id;
+
+        public Attributes getAttributes() {
+            return attributes;
+        }
+
+        public void setAttributes(Attributes attributes) {
+            this.attributes = attributes;
+        }
+
+        public String getId() {
+            return id;
+        }
+
+        public void setId(String id) {
+            this.id = id;
+        }
+    }
+
+    public static class Attributes {
+        private String type;
+        private String url;
+
+        public String getType() {
+            return type;
+        }
+
+        public void setType(String type) {
+            this.type = type;
+        }
+
+        public String getUrl() {
+            return url;
+        }
+
+        public void setUrl(String url) {
+            this.url = url;
+        }
+    }
+
+    public static class Error {
+        private String errorCode;
+        private String message;
+
+        public String getErrorCode() {
+            return errorCode;
+        }
+
+        public void setErrorCode(String errorCode) {
+            this.errorCode = errorCode;
+        }
+
+        public String getMessage() {
+            return message;
+        }
+
+        public void setMessage(String message) {
+            this.message = message;
+        }
+    }
+}
+
+----------------------
+Call SHJservice as:
+--------------------
+
+private <T, R> ResponseEntity<R> callSHJService(T requestObject, HttpHeaders httpHeaders, String apiUrl, Class<R> responseType) {
+    try {
+        String requestJson = objectMapper.writeValueAsString(requestObject);
+        HttpEntity<String> membersEntity = new HttpEntity<>(requestJson, httpHeaders);
+        ResponseEntity<String> rawResponse = restTemplate.exchange(apiUrl, HttpMethod.POST, membersEntity, String.class);
+        logger.info("Raw Response from SHJ service: {}", rawResponse.getBody());
+
+        // Enable this if you need to see the exact response structure
+        logger.debug("Complete raw response: {}", rawResponse.getBody());
+
+        // Parsed response
+        try {
+            R parsedResponse = objectMapper.readValue(rawResponse.getBody(), responseType);
+            return ResponseEntity.status(rawResponse.getStatusCode())
+                    .headers(rawResponse.getHeaders())
+                    .body(parsedResponse);
+        } catch (JsonProcessingException e) {
+            logger.error("Error parsing response, trying alternative approach. Error: {}", e.getMessage());
+            // Try with lenient parsing if the first attempt fails
+            ObjectMapper lenientMapper = new ObjectMapper();
+            lenientMapper.configure(DeserializationFeature.ACCEPT_SINGLE_VALUE_AS_ARRAY, true);
+            lenientMapper.configure(DeserializationFeature.UNWRAP_ROOT_VALUE, false);
+            R parsedResponse = lenientMapper.readValue(rawResponse.getBody(), responseType);
+            return ResponseEntity.status(rawResponse.getStatusCode())
+                    .headers(rawResponse.getHeaders())
+                    .body(parsedResponse);
+        }
+    } catch (JsonProcessingException e) {
+        logger.error("Error converting request object to JSON: {}", e.getMessage());
+        throw new RuntimeException("Error Processing JSON Request", e);
+    } catch (RestClientException e) {
+        logger.error("Error calling SHJ service: {}", e.getMessage());
+        throw new RuntimeException("Error calling SHJ service", e);
+    } catch (IOException e) {
+        logger.error("IO Error during SHJ service call: {}", e.getMessage());
+        throw new RuntimeException("IO Error during SHJ service call", e);
+    }
+}
+
+-----------------------
+
