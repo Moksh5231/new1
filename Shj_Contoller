@@ -421,3 +421,72 @@ Detail:
     "message": "Error Processing JSON Request",
     "path": "/onecm-shj-oci/generateToken"
 }
+
+
+----------------
+
+Resposne:
+---------
+{
+  "compositeResponse": [
+    {
+      "body": {
+        "totalSize": 0,
+        "done": true,
+        "records": []
+      },
+      "httpHeaders": {},
+      "httpStatusCode": 200,
+      "referenceId": "refMemberPlanId"
+    },
+    {
+      "body": {
+        "totalSize": 1,
+        "done": true,
+        "records": [
+          {
+            "attributes": {
+              "type": "RecordType",
+              "url": "/services/data/v62.0/sobjects/RecordType/012We000000AqwbIAC"
+            },
+            "Id": "012We000000AqwbIAC"
+          }
+        ]
+      },
+      "httpHeaders": {},
+      "httpStatusCode": 200,
+      "referenceId": "refRecTypeId"
+    },
+    {
+      "body": {
+        "totalSize": 0,
+        "done": true,
+        "records": []
+      },
+      "httpHeaders": {},
+      "httpStatusCode": 200,
+      "referenceId": "refAccountId"
+    },
+    {
+      "body": {
+        "totalSize": 0,
+        "done": true,
+        "records": []
+      },
+      "httpHeaders": {},
+      "httpStatusCode": 200,
+      "referenceId": "refUserId"
+    },
+    {
+      "body": [
+        {
+          "errorCode": "PROCESSING_HALTED",
+          "message": "Invalid reference specified. No value for refAccountId.records[0].Id found in refAccountId. Provided referenceId ('refAccountId.records[0].Id') must start with a letter or a number, and it can contain only letters, numbers and underscores ('_')."
+        }
+      ],
+      "httpHeaders": {},
+      "httpStatusCode": 400,
+      "referenceId": "refTask"
+    }
+  ]
+}
