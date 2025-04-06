@@ -24,6 +24,9 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
 @RestController
@@ -59,8 +62,11 @@ public class TestConnectionController {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    ShjValidator shjValidator;
 
-    @GetMapping(value="/generateToken", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+
+    @GetMapping(value="/generateToken", consumes = MediaType.MULTIPART_FORM_DATA_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<?> generateToken(@RequestParam("x-apitransactionId") String transactionId,
                                                 @RequestParam("shjfile") MultipartFile shjfile) throws Exception {
         try {
@@ -78,10 +84,15 @@ public class TestConnectionController {
                         .findFirst()
                         .orElse(null);
 
-                if ("update".equalsIgnoreCase(caseActionValue)) {
+                String shjTxnId = shjRequest.getShj().stream()
+                        .map(shj -> shj.getShjMember().getShjCase().getShjTxnID())
+                        .findFirst()
+                        .orElse(null);
+
+                if ("update".equalsIgnoreCase(caseActionValue) && !(shjValidator.validateMandatoryFields(shjRequest.getShj().get(0), shjTxnId, transactionId))) {
                     logger.info("Case Action is update");
                     return processTaskRequest(filePayload, transactionId, shjRequest, httpHeaders);
-                } else if ("new".equalsIgnoreCase(caseActionValue)) {
+                } else if ("new".equalsIgnoreCase(caseActionValue) && !(shjValidator.validateMandatoryFields(shjRequest.getShj().get(0), shjTxnId, transactionId))) {
                     return processVerifyMemberRequest(filePayload, transactionId, shjRequest, httpHeaders);
                 }
             }
@@ -95,8 +106,19 @@ public class TestConnectionController {
         ShjCompositeReqForTask shjCompositeReqForTask = shjFileProcessForTask.payloadprocessForTask(filePayload, transactionId, shjRequest);
         if (shjCompositeReqForTask != null) {
             logger.info("Request: " + shjCompositeReqForTask);
-            ResponseEntity<ShjCompositeResponseForTask> response = CallShjServiceForTask(shjCompositeReqForTask, httpHeaders, apiUrl);
+            ResponseEntity<ShjCompositeResponseForTask> response = callShjServiceForTask(shjCompositeReqForTask, httpHeaders, apiUrl);
             logger.info("Response: " + response.getBody());
+            // Get the ID values from the response map into a Map key as ReferenceID and Value as ID vale
+            // response.getStatusCode().is2xxSuccessful() && response.getBody().getCompositeResponse().get(0).getBody().getTotalSize() > 0
+            Map<String, String> responseMap = new HashMap<>();
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                for (ShjCompositeResponseForTask.CompositeResponse compositeResponse : response.getBody().getCompositeResponse()) {
+                    if (compositeResponse.getBody().getTotalSize() > 0 && compositeResponse.getHttpStatusCode() == 200) {
+                        responseMap.put(compositeResponse.getReferenceId(), compositeResponse.getBody().getRecords().get(0).getId());
+                    }
+                }
+                return ResponseEntity.ok(responseMap);
+            }
             return response;
         }
         return ResponseEntity.badRequest().build();
@@ -106,16 +128,31 @@ public class TestConnectionController {
         ShjCompositeReqForVerifyMember shjCompositeReqForVerifyMember = shjFileProcessForVerifyMember.payloadprocessForVerifyMember(filePayload, transactionId, shjRequest);
         if (shjCompositeReqForVerifyMember != null) {
             logger.info("Request: " + shjCompositeReqForVerifyMember);
-            ResponseEntity<ShjCompositeResponseForVerifyMember> response = CallShjServiceForMemberVerify(shjCompositeReqForVerifyMember, httpHeaders, apiUrl);
+            ResponseEntity<ShjCompositeResponseForVerifyMember> response = callShjServiceForMemberVerify(shjCompositeReqForVerifyMember, httpHeaders, apiUrl);
             logger.info("Response: " + response.getBody());
 
-            ShjCompositeReqForCase shjCompositeReqForCase = shjFileProcessForCase.payloadprocessForCSR(filePayload, transactionId, shjRequest);
-            logger.info("Request: " + shjCompositeReqForCase);
-            ResponseEntity<ShjCompositeResponseForCase> responseForCase = CallShjServiceForCase(shjCompositeReqForCase, httpHeaders, apiUrl);
-            logger.info("Response: " + responseForCase.getBody());
-            return responseForCase;
+        // based on the response of VerifyMember of TotalSize > 0 then call the case service
+            if (response.getStatusCode().is2xxSuccessful() &&
+                    Objects.requireNonNull(response.getBody()).getCompositeResponse().get(0).getBody().getTotalSize() > 0 &&
+                    response.getBody().getCompositeResponse().get(0).getHttpStatusCode() == 200) {
+                ResponseEntity<ShjCompositeResponseForCase> responseForCase = callCaseService(filePayload, transactionId, shjRequest, httpHeaders);
+                return responseForCase;
+            }
+            else {
+                logger.info("No records found in VerifyMember response");
+                // call foundational-Model service
+                return ResponseEntity.ok(response);
+            }
         }
         return ResponseEntity.badRequest().build();
+    }
+
+    private ResponseEntity<ShjCompositeResponseForCase> callCaseService(String filePayload, String transactionId, ShjRequest shjRequest, HttpHeaders httpHeaders) {
+        ShjCompositeReqForCase shjCompositeReqForCase = shjFileProcessForCase.payloadprocessForCSR(filePayload, transactionId, shjRequest);
+        logger.info("Request: " + shjCompositeReqForCase);
+        ResponseEntity<ShjCompositeResponseForCase> responseForCase = callShjServiceForCase(shjCompositeReqForCase, httpHeaders, apiUrl);
+        logger.info("Response: " + responseForCase.getBody());
+        return responseForCase;
     }
 
 
@@ -133,15 +170,15 @@ public class TestConnectionController {
 
     }
 
-    private ResponseEntity<ShjCompositeResponseForTask> CallShjServiceForTask(ShjCompositeReqForTask shjCompositeReqForTask, HttpHeaders httpHeaders, String apiUrl) {
+    private ResponseEntity<ShjCompositeResponseForTask> callShjServiceForTask(ShjCompositeReqForTask shjCompositeReqForTask, HttpHeaders httpHeaders, String apiUrl) {
         return callSHJService(shjCompositeReqForTask, httpHeaders, apiUrl, ShjCompositeResponseForTask.class);
     }
 
-    private ResponseEntity<ShjCompositeResponseForVerifyMember> CallShjServiceForMemberVerify(ShjCompositeReqForVerifyMember shjCompositeReqForVerifyMember, HttpHeaders httpHeaders, String apiUrl) {
+    private ResponseEntity<ShjCompositeResponseForVerifyMember> callShjServiceForMemberVerify(ShjCompositeReqForVerifyMember shjCompositeReqForVerifyMember, HttpHeaders httpHeaders, String apiUrl) {
         return callSHJService(shjCompositeReqForVerifyMember, httpHeaders, apiUrl, ShjCompositeResponseForVerifyMember.class);
     }
 
-    private ResponseEntity<ShjCompositeResponseForCase> CallShjServiceForCase(ShjCompositeReqForCase shjCompositeReqForCase, HttpHeaders httpHeaders, String apiUrl) {
+    private ResponseEntity<ShjCompositeResponseForCase> callShjServiceForCase(ShjCompositeReqForCase shjCompositeReqForCase, HttpHeaders httpHeaders, String apiUrl) {
         return callSHJService(shjCompositeReqForCase, httpHeaders, apiUrl, ShjCompositeResponseForCase.class);
     }
 
@@ -154,4 +191,17 @@ public class TestConnectionController {
             throw new RuntimeException(e);
         }
     }
+}
+
+--------------------
+
+error:
+
+{
+    "timestamp": 1743905152442,
+    "status": 500,
+    "error": "Internal Server Error",
+    "trace": "org.springframework.web.client.RestClientException: Error while extracting response for type [class com.aetna.clinical.pojo.task.ShjCompositeResponseForTask] and content type [application/json;charset=UTF-8]\r\n\tat org.springframework.web.client.HttpMessageConverterExtractor.extractData(HttpMessageConverterExtractor.java:119)\r\n\tat org.springframework.web.client.RestTemplate$ResponseEntityResponseExtractor.extractData(RestTemplate.java:1159)\r\n\tat org.springframework.web.client.RestTemplate$ResponseEntityResponseExtractor.extractData(RestTemplate.java:1142)\r\n\tat org.springframework.web.client.RestTemplate.doExecute(RestTemplate.java:892)\r\n\tat org.springframework.web.client.RestTemplate.execute(RestTemplate.java:790)\r\n\tat org.springframework.web.client.RestTemplate.exchange(RestTemplate.java:672)\r\n\tat com.aetna.clinical.controller.TestConnectionController.callSHJService(TestConnectionController.java:189)\r\n\tat com.aetna.clinical.controller.TestConnectionController.callShjServiceForTask(TestConnectionController.java:174)\r\n\tat com.aetna.clinical.controller.TestConnectionController.processTaskRequest(TestConnectionController.java:109)\r\n\tat com.aetna.clinical.controller.TestConnectionController.generateToken(TestConnectionController.java:94)\r\n\tat java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)\r\n\tat java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:77)\r\n\tat java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)\r\n\tat java.base/java.lang.reflect.Method.invoke(Method.java:568)\r\n\tat org.springframework.web.method.support.InvocableHandlerMethod.doInvoke(InvocableHandlerMethod.java:255)\r\n\tat org.springframework.web.method.support.InvocableHandlerMethod.invokeForRequest(InvocableHandlerMethod.java:188)\r\n\tat org.springframework.web.servlet.mvc.method.annotation.ServletInvocableHandlerMethod.invokeAndHandle(ServletInvocableHandlerMethod.java:118)\r\n\tat org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerAdapter.invokeHandlerMethod(RequestMappingHandlerAdapter.java:926)\r\n\tat org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerAdapter.handleInternal(RequestMappingHandlerAdapter.java:831)\r\n\tat org.springframework.web.servlet.mvc.method.AbstractHandlerMethodAdapter.handle(AbstractHandlerMethodAdapter.java:87)\r\n\tat org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1089)\r\n\tat org.springframework.web.servlet.DispatcherServlet.doService(DispatcherServlet.java:979)\r\n\tat org.springframework.web.servlet.FrameworkServlet.processRequest(FrameworkServlet.java:1014)\r\n\tat org.springframework.web.servlet.FrameworkServlet.doGet(FrameworkServlet.java:903)\r\n\tat jakarta.servlet.http.HttpServlet.service(HttpServlet.java:564)\r\n\tat org.springframework.web.servlet.FrameworkServlet.service(FrameworkServlet.java:885)\r\n\tat jakarta.servlet.http.HttpServlet.service(HttpServlet.java:658)\r\n\tat org.apache.catalina.core.ApplicationFilterChain.internalDoFilter(ApplicationFilterChain.java:206)\r\n\tat org.apache.catalina.core.ApplicationFilterChain.doFilter(ApplicationFilterChain.java:150)\r\n\tat org.apache.tomcat.websocket.server.WsFilter.doFilter(WsFilter.java:51)\r\n\tat org.apache.catalina.core.ApplicationFilterChain.internalDoFilter(ApplicationFilterChain.java:175)\r\n\tat org.apache.catalina.core.ApplicationFilterChain.doFilter(ApplicationFilterChain.java:150)\r\n\tat org.springframework.web.filter.RequestContextFilter.doFilterInternal(RequestContextFilter.java:100)\r\n\tat org.springframework.web.filter.OncePerRequestFilter.doFilter(OncePerRequestFilter.java:116)\r\n\tat org.apache.catalina.core.ApplicationFilterChain.internalDoFilter(ApplicationFilterChain.java:175)\r\n\tat org.apache.catalina.core.ApplicationFilterChain.doFilter(ApplicationFilterChain.java:150)\r\n\tat org.springframework.web.filter.FormContentFilter.doFilterInternal(FormContentFilter.java:93)\r\n\tat org.springframework.web.filter.OncePerRequestFilter.doFilter(OncePerRequestFilter.java:116)\r\n\tat org.apache.catalina.core.ApplicationFilterChain.internalDoFilter(ApplicationFilterChain.java:175)\r\n\tat org.apache.catalina.core.ApplicationFilterChain.doFilter(ApplicationFilterChain.java:150)\r\n\tat org.springframework.web.filter.CharacterEncodingFilter.doFilterInternal(CharacterEncodingFilter.java:201)\r\n\tat org.springframework.web.filter.OncePerRequestFilter.doFilter(OncePerRequestFilter.java:116)\r\n\tat org.apache.catalina.core.ApplicationFilterChain.internalDoFilter(ApplicationFilterChain.java:175)\r\n\tat org.apache.catalina.core.ApplicationFilterChain.doFilter(ApplicationFilterChain.java:150)\r\n\tat org.apache.catalina.core.StandardWrapperValve.invoke(StandardWrapperValve.java:167)\r\n\tat org.apache.catalina.core.StandardContextValve.invoke(StandardContextValve.java:90)\r\n\tat org.apache.catalina.authenticator.AuthenticatorBase.invoke(AuthenticatorBase.java:482)\r\n\tat org.apache.catalina.core.StandardHostValve.invoke(StandardHostValve.java:115)\r\n\tat org.apache.catalina.valves.ErrorReportValve.invoke(ErrorReportValve.java:93)\r\n\tat org.apache.catalina.core.StandardEngineValve.invoke(StandardEngineValve.java:74)\r\n\tat org.apache.catalina.connector.CoyoteAdapter.service(CoyoteAdapter.java:344)\r\n\tat org.apache.coyote.http11.Http11Processor.service(Http11Processor.java:391)\r\n\tat org.apache.coyote.AbstractProcessorLight.process(AbstractProcessorLight.java:63)\r\n\tat org.apache.coyote.AbstractProtocol$ConnectionHandler.process(AbstractProtocol.java:896)\r\n\tat org.apache.tomcat.util.net.NioEndpoint$SocketProcessor.doRun(NioEndpoint.java:1736)\r\n\tat org.apache.tomcat.util.net.SocketProcessorBase.run(SocketProcessorBase.java:52)\r\n\tat org.apache.tomcat.util.threads.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1191)\r\n\tat org.apache.tomcat.util.threads.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:659)\r\n\tat org.apache.tomcat.util.threads.TaskThread$WrappingRunnable.run(TaskThread.java:63)\r\n\tat java.base/java.lang.Thread.run(Thread.java:842)\r\nCaused by: org.springframework.http.converter.HttpMessageNotReadableException: JSON parse error: Cannot deserialize value of type `com.aetna.clinical.pojo.task.ShjCompositeResponseForTask$Body` from Array value (token `JsonToken.START_ARRAY`)\r\n\tat org.springframework.http.converter.json.AbstractJackson2HttpMessageConverter.readJavaType(AbstractJackson2HttpMessageConverter.java:406)\r\n\tat org.springframework.http.converter.json.AbstractJackson2HttpMessageConverter.read(AbstractJackson2HttpMessageConverter.java:354)\r\n\tat org.springframework.web.client.HttpMessageConverterExtractor.extractData(HttpMessageConverterExtractor.java:104)\r\n\t... 59 more\r\nCaused by: com.fasterxml.jackson.databind.exc.MismatchedInputException: Cannot deserialize value of type `com.aetna.clinical.pojo.task.ShjCompositeResponseForTask$Body` from Array value (token `JsonToken.START_ARRAY`)\n at [Source: (org.springframework.util.StreamUtils$NonClosingInputStream); line: 1, column: 629] (through reference chain: com.aetna.clinical.pojo.task.ShjCompositeResponseForTask[\"compositeResponse\"]->java.util.ArrayList[4]->com.aetna.clinical.pojo.task.ShjCompositeResponseForTask$CompositeResponse[\"body\"])\r\n\tat com.fasterxml.jackson.databind.exc.MismatchedInputException.from(MismatchedInputException.java:59)\r\n\tat com.fasterxml.jackson.databind.DeserializationContext.reportInputMismatch(DeserializationContext.java:1752)\r\n\tat com.fasterxml.jackson.databind.DeserializationContext.handleUnexpectedToken(DeserializationContext.java:1526)\r\n\tat com.fasterxml.jackson.databind.DeserializationContext.handleUnexpectedToken(DeserializationContext.java:1473)\r\n\tat com.fasterxml.jackson.databind.deser.BeanDeserializer._deserializeFromArray(BeanDeserializer.java:656)\r\n\tat com.fasterxml.jackson.databind.deser.BeanDeserializer._deserializeOther(BeanDeserializer.java:211)\r\n\tat com.fasterxml.jackson.databind.deser.BeanDeserializer.deserialize(BeanDeserializer.java:187)\r\n\tat com.fasterxml.jackson.databind.deser.impl.MethodProperty.deserializeAndSet(MethodProperty.java:129)\r\n\tat com.fasterxml.jackson.databind.deser.BeanDeserializer.deserializeFromObject(BeanDeserializer.java:392)\r\n\tat com.fasterxml.jackson.databind.deser.BeanDeserializer.deserialize(BeanDeserializer.java:185)\r\n\tat com.fasterxml.jackson.databind.deser.std.CollectionDeserializer._deserializeFromArray(CollectionDeserializer.java:359)\r\n\tat com.fasterxml.jackson.databind.deser.std.CollectionDeserializer.deserialize(CollectionDeserializer.java:244)\r\n\tat com.fasterxml.jackson.databind.deser.std.CollectionDeserializer.deserialize(CollectionDeserializer.java:28)\r\n\tat com.fasterxml.jackson.databind.deser.impl.MethodProperty.deserializeAndSet(MethodProperty.java:129)\r\n\tat com.fasterxml.jackson.databind.deser.BeanDeserializer.deserializeFromObject(BeanDeserializer.java:392)\r\n\tat com.fasterxml.jackson.databind.deser.BeanDeserializer.deserialize(BeanDeserializer.java:185)\r\n\tat com.fasterxml.jackson.databind.deser.DefaultDeserializationContext.readRootValue(DefaultDeserializationContext.java:323)\r\n\tat com.fasterxml.jackson.databind.ObjectReader._bindAndClose(ObjectReader.java:2105)\r\n\tat com.fasterxml.jackson.databind.ObjectReader.readValue(ObjectReader.java:1481)\r\n\tat org.springframework.http.converter.json.AbstractJackson2HttpMessageConverter.readJavaType(AbstractJackson2HttpMessageConverter.java:395)\r\n\t... 61 more\r\n",
+    "message": "Error while extracting response for type [class com.aetna.clinical.pojo.task.ShjCompositeResponseForTask] and content type [application/json;charset=UTF-8]",
+    "path": "/onecm-shj-oci/generateToken"
 }
