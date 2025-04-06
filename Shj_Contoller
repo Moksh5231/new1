@@ -345,3 +345,45 @@ or cases are:
 	"httpStatusCode": 200,
 	"referenceId": "refMemberPlanId"
 }
+
+
+------------
+
+private ResponseEntity<?> processTaskRequest(String filePayload, String transactionId, ShjRequest shjRequest, HttpHeaders httpHeaders) throws Exception {
+    ShjCompositeReqForTask shjCompositeReqForTask = shjFileProcessForTask.payloadprocessForTask(filePayload, transactionId, shjRequest);
+    if (shjCompositeReqForTask != null) {
+        logger.info("Request: {}", shjCompositeReqForTask);
+        ResponseEntity<ShjCompositeResponseForTask> response = callShjServiceForTask(shjCompositeReqForTask, httpHeaders, apiUrl);
+        
+        if(response.getBody() == null){
+            logger.error("Response body is null");
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Response body is null from SHJ Service");
+        }
+        
+        Map<String, String> responseMap = new HashMap<>();
+        if (response.getStatusCode().is2xxSuccessful()) {
+            for (ShjCompositeResponseForTask.CompositeResponse compositeResponse : 
+                    Optional.ofNullable(response.getBody().getCompositeResponse()).orElse(Collections.emptyList())) {
+                
+                if (compositeResponse != null && compositeResponse.getBody() != null) {
+                    for (ShjCompositeResponseForTask.Body body : compositeResponse.getBody()) {
+                        if (body.getTotalSize() > 0 && compositeResponse.getHttpStatusCode() == 200) {
+                            if (body.getRecords() != null && !body.getRecords().isEmpty() 
+                                    && !compositeResponse.getReferenceId().equalsIgnoreCase(TaskConstants.Reference_TASK)) {
+                                responseMap.put(compositeResponse.getReferenceId(), body.getRecords().get(0).getId());
+                            } else if (body.getRecords() != null && !body.getRecords().isEmpty() 
+                                    && compositeResponse.getReferenceId().equalsIgnoreCase(TaskConstants.Reference_TASK)) {
+                                responseMap.put(compositeResponse.getReferenceId(), body.getId());
+                            } else {
+                                logger.info("No records found in Task response");
+                            }
+                        }
+                    }
+                }
+            }
+            return ResponseEntity.ok(responseMap);
+        }
+        return response;
+    }
+    return ResponseEntity.badRequest().build();
+}
