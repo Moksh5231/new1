@@ -155,3 +155,50 @@ private <T, R> ResponseEntity<R> callSHJService(T requestObject, HttpHeaders htt
         throw new RuntimeException("Error processing SHJ service response", e);
     }
 }
+
+-----------
+
+private ResponseEntity<?> processTaskRequest(String filePayload, String transactionId, 
+        ShjRequest shjRequest, HttpHeaders httpHeaders) {
+    try {
+        ShjCompositeReqForTask shjCompositeReqForTask = 
+            shjFileProcessForTask.payloadprocessForTask(filePayload, transactionId, shjRequest);
+        
+        if (shjCompositeReqForTask == null) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        ResponseEntity<ShjCompositeResponseForTask> response = 
+            callShjServiceForTask(shjCompositeReqForTask, httpHeaders, apiUrl);
+
+        if (response.getBody() == null) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body("Response body is null from SHJ Service");
+        }
+
+        Map<String, Object> responseMap = new HashMap<>();
+        for (ShjCompositeResponseForTask.CompositeResponse compositeResponse : 
+                response.getBody().getCompositeResponse()) {
+            
+            if (compositeResponse.isError()) {
+                // Handle error response
+                responseMap.put(compositeResponse.getReferenceId() + "_error", 
+                    compositeResponse.getErrors());
+            } else if (compositeResponse.getBody() != null) {
+                // Handle success response
+                ShjCompositeResponseForTask.Body body = compositeResponse.getBody();
+                if (TaskConstants.Reference_TASK.equalsIgnoreCase(compositeResponse.getReferenceId())) {
+                    responseMap.put(compositeResponse.getReferenceId(), body.getId());
+                } else if (body.getRecords() != null && !body.getRecords().isEmpty()) {
+                    responseMap.put(compositeResponse.getReferenceId(), 
+                        body.getRecords().get(0).getId());
+                }
+            }
+        }
+        return ResponseEntity.ok(responseMap);
+    } catch (Exception e) {
+        logger.error("Error in processTaskRequest: {}", e.getMessage(), e);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+            .body("Error processing task request: " + e.getMessage());
+    }
+}
