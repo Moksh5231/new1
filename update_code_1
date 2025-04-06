@@ -1,21 +1,19 @@
-Code fix:
----------
-
+Code:
+-----
 package com.aetna.clinical.pojo.task;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.annotation.JsonInclude;
-import com.fasterxml.jackson.annotation.JsonInclude.Include;
-import com.fasterxml.jackson.annotation.JsonUnwrapped;
+import com.fasterxml.jackson.annotation.*;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import java.util.*;
 
-import java.util.List;
-import java.util.Map;
-
-@JsonInclude(Include.NON_NULL)
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public class ShjCompositeResponseForTask {
 
+    @JsonProperty("compositeResponse")
+    @JsonDeserialize(using = CompositeResponseDeserializer.class)
     private List<CompositeResponse> compositeResponse;
 
+    // Getters and setters
     public List<CompositeResponse> getCompositeResponse() {
         return compositeResponse;
     }
@@ -24,126 +22,136 @@ public class ShjCompositeResponseForTask {
         this.compositeResponse = compositeResponse;
     }
 
-    @JsonInclude(Include.NON_NULL)
     public static class CompositeResponse {
-        @JsonUnwrapped
         private Body body;
-        private List<Body> bodies; // Add this to handle array case
         private Map<String, String> httpHeaders;
         private int httpStatusCode;
         private String referenceId;
 
-        public Body getBody() {
-            if (body != null) {
-                return body;
-            }
-            if (bodies != null && !bodies.isEmpty()) {
-                return bodies.get(0); // Return first element if it's an array
-            }
-            return null;
-        }
-
-        public void setBody(Body body) {
-            this.body = body;
-        }
-
-        public List<Body> getBodies() {
-            return bodies;
-        }
-
-        public void setBodies(List<Body> bodies) {
-            this.bodies = bodies;
-        }
-
-        public Map<String, String> getHttpHeaders() {
-            return httpHeaders;
-        }
-
-        public void setHttpHeaders(Map<String, String> httpHeaders) {
-            this.httpHeaders = httpHeaders;
-        }
-
-        public int getHttpStatusCode() {
-            return httpStatusCode;
-        }
-
-        public void setHttpStatusCode(int httpStatusCode) {
-            this.httpStatusCode = httpStatusCode;
-        }
-
-        public String getReferenceId() {
-            return referenceId;
-        }
-
-        public void setReferenceId(String referenceId) {
-            this.referenceId = referenceId;
-        }
+        // Getters and setters
+        public Body getBody() { return body; }
+        public void setBody(Body body) { this.body = body; }
+        public Map<String, String> getHttpHeaders() { return httpHeaders; }
+        public void setHttpHeaders(Map<String, String> httpHeaders) { this.httpHeaders = httpHeaders; }
+        public int getHttpStatusCode() { return httpStatusCode; }
+        public void setHttpStatusCode(int httpStatusCode) { this.httpStatusCode = httpStatusCode; }
+        public String getReferenceId() { return referenceId; }
+        public void setReferenceId(String referenceId) { this.referenceId = referenceId; }
     }
 
-    // Rest of the class remains the same...
-    // [Keep all other inner classes (Body, Record, Attributes, Error) unchanged]
+    // Inner classes for Body, Record, Attributes, Error remain the same as before
+    // ...
 }
 
-------------
 
-private <T, R> ResponseEntity<R> callSHJService(T requestObject, HttpHeaders httpHeaders, String apiUrl, Class<R> responseType) {
+-----------
+New class:
+---------
+package com.aetna.clinical.pojo.task;
+
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.deser.std.StdDeserializer;
+import java.io.IOException;
+import java.util.*;
+
+public class CompositeResponseDeserializer extends StdDeserializer<List<ShjCompositeResponseForTask.CompositeResponse>> {
+
+    public CompositeResponseDeserializer() {
+        this(null);
+    }
+
+    public CompositeResponseDeserializer(Class<?> vc) {
+        super(vc);
+    }
+
+    @Override
+    public List<ShjCompositeResponseForTask.CompositeResponse> deserialize(
+            JsonParser p, DeserializationContext ctxt) throws IOException {
+        
+        ObjectMapper mapper = (ObjectMapper) p.getCodec();
+        JsonNode node = mapper.readTree(p);
+        
+        List<ShjCompositeResponseForTask.CompositeResponse> responses = new ArrayList<>();
+        
+        if (node.isArray()) {
+            for (JsonNode compositeNode : node) {
+                responses.add(parseCompositeResponse(mapper, compositeNode));
+            }
+        }
+        
+        return responses;
+    }
+
+    private ShjCompositeResponseForTask.CompositeResponse parseCompositeResponse(
+            ObjectMapper mapper, JsonNode compositeNode) throws IOException {
+        
+        ShjCompositeResponseForTask.CompositeResponse response = 
+            new ShjCompositeResponseForTask.CompositeResponse();
+        
+        // Handle body which might be array or object
+        JsonNode bodyNode = compositeNode.get("body");
+        if (bodyNode != null) {
+            if (bodyNode.isArray() && bodyNode.size() > 0) {
+                // Take first element if body is an array
+                response.setBody(mapper.treeToValue(bodyNode.get(0), 
+                    ShjCompositeResponseForTask.Body.class));
+            } else {
+                response.setBody(mapper.treeToValue(bodyNode, 
+                    ShjCompositeResponseForTask.Body.class));
+            }
+        }
+        
+        // Handle other fields
+        if (compositeNode.has("httpHeaders")) {
+            response.setHttpHeaders(mapper.convertValue(
+                compositeNode.get("httpHeaders"), 
+                new TypeReference<Map<String, String>>() {}));
+        }
+        
+        if (compositeNode.has("httpStatusCode")) {
+            response.setHttpStatusCode(compositeNode.get("httpStatusCode").asInt());
+        }
+        
+        if (compositeNode.has("referenceId")) {
+            response.setReferenceId(compositeNode.get("referenceId").asText());
+        }
+        
+        return response;
+    }
+}
+
+----------------
+private <T, R> ResponseEntity<R> callSHJService(T requestObject, HttpHeaders httpHeaders, 
+        String apiUrl, Class<R> responseType) {
     try {
         String requestJson = objectMapper.writeValueAsString(requestObject);
         HttpEntity<String> membersEntity = new HttpEntity<>(requestJson, httpHeaders);
-        ResponseEntity<String> rawResponse = restTemplate.exchange(apiUrl, HttpMethod.POST, membersEntity, String.class);
-        logger.info("Raw Response from SHJ service: {}", rawResponse.getBody());
+        ResponseEntity<String> rawResponse = restTemplate.exchange(
+            apiUrl, HttpMethod.POST, membersEntity, String.class);
+        
+        logger.debug("Raw Response from SHJ service: {}", rawResponse.getBody());
 
-        // Configure ObjectMapper to be more lenient
+        // Configure ObjectMapper with custom settings
         ObjectMapper lenientMapper = new ObjectMapper();
         lenientMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         lenientMapper.configure(DeserializationFeature.ACCEPT_SINGLE_VALUE_AS_ARRAY, true);
-        lenientMapper.configure(DeserializationFeature.UNWRAP_SINGLE_VALUE_ARRAYS, true);
+        
+        // Register our custom deserializer
+        SimpleModule module = new SimpleModule();
+        module.addDeserializer(
+            new TypeReference<List<ShjCompositeResponseForTask.CompositeResponse>>() {}.getType(),
+            new CompositeResponseDeserializer());
+        lenientMapper.registerModule(module);
 
-        // First try with the standard parsing
-        try {
-            R parsedResponse = lenientMapper.readValue(rawResponse.getBody(), responseType);
-            return ResponseEntity.status(rawResponse.getStatusCode())
-                    .headers(rawResponse.getHeaders())
-                    .body(parsedResponse);
-        } catch (JsonProcessingException e) {
-            logger.warn("Standard parsing failed, trying alternative approach. Error: {}", e.getMessage());
-            
-            // If standard parsing fails, try reading as generic Map first
-            Map<String, Object> responseMap = lenientMapper.readValue(rawResponse.getBody(), new TypeReference<Map<String, Object>>() {});
-            
-            // Manually handle the compositeResponse array
-            if (responseMap.containsKey("compositeResponse")) {
-                List<Map<String, Object>> compositeResponses = (List<Map<String, Object>>) responseMap.get("compositeResponse");
-                for (Map<String, Object> cr : compositeResponses) {
-                    if (cr.containsKey("body")) {
-                        Object body = cr.get("body");
-                        if (body instanceof List) {
-                            // Convert array body to single body
-                            List<Map<String, Object>> bodyList = (List<Map<String, Object>>) body;
-                            if (!bodyList.isEmpty()) {
-                                cr.put("body", bodyList.get(0));
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // Convert back to JSON and then to the target type
-            String normalizedJson = lenientMapper.writeValueAsString(responseMap);
-            R parsedResponse = lenientMapper.readValue(normalizedJson, responseType);
-            
-            return ResponseEntity.status(rawResponse.getStatusCode())
-                    .headers(rawResponse.getHeaders())
-                    .body(parsedResponse);
-        }
-    } catch (JsonProcessingException e) {
-        logger.error("Error converting request object to JSON: {}", e.getMessage());
-        throw new RuntimeException("Error Processing JSON Request", e);
-    } catch (RestClientException e) {
-        logger.error("Error calling SHJ service: {}", e.getMessage());
-        throw new RuntimeException("Error calling SHJ service", e);
-    } catch (IOException e) {
-        logger.error("IO Error during SHJ service call: {}", e.getMessage());
-        throw new RuntimeException("IO Error during SHJ service call", e);
+        // Parse the response
+        R parsedResponse = lenientMapper.readValue(rawResponse.getBody(), responseType);
+        
+        return ResponseEntity.status(rawResponse.getStatusCode())
+                .headers(rawResponse.getHeaders())
+                .body(parsedResponse);
+    } catch (Exception e) {
+        logger.error("Error in callSHJService: {}", e.getMessage(), e);
+        throw new RuntimeException("Error processing SHJ service response", e);
     }
 }
