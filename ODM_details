@@ -189,3 +189,55 @@ public class ShjPayloadTransformer {
         return taskMap;
     }
 }
+
+--------------
+
+@Service
+@RequiredArgsConstructor
+public class OdmService {
+    private static final Logger logger = LoggerFactory.getLogger(OdmService.class);
+
+    private final RestTemplate restTemplate;
+    private final ObjectMapper objectMapper;
+
+    public ResponseEntity<String> callOdmService(
+            String apiUrl, 
+            Map<String, Object> requestBody,
+            HttpHeaders headers) {
+        
+        try {
+            logger.info("Calling ODM service at: {}", apiUrl);
+            
+            // Create request entity
+            HttpEntity<Map<String, Object>> requestEntity = new HttpEntity<>(requestBody, headers);
+            
+            // Make the API call
+            ResponseEntity<String> response = restTemplate.exchange(
+                apiUrl,
+                HttpMethod.POST,
+                requestEntity,
+                String.class
+            );
+            
+            logger.info("ODM service response status: {}", response.getStatusCode());
+            return response;
+            
+        } catch (HttpClientErrorException e) {
+            logger.error("ODM client error: {} - {}", e.getStatusCode(), e.getResponseBodyAsString());
+            return ResponseEntity.status(e.getStatusCode())
+                .body(e.getResponseBodyAsString());
+        } catch (HttpServerErrorException e) {
+            logger.error("ODM server error: {} - {}", e.getStatusCode(), e.getResponseBodyAsString());
+            return ResponseEntity.status(e.getStatusCode())
+                .body(e.getResponseBodyAsString());
+        } catch (Exception e) {
+            logger.error("Error calling ODM service: {}", e.getMessage(), e);
+            throw new OdmServiceException("Failed to call ODM service: " + e.getMessage(), e);
+        }
+    }
+
+    // Optional: Add method for parsing ODM response
+    public Map<String, Object> parseOdmResponse(String responseBody) throws JsonProcessingException {
+        return objectMapper.readValue(responseBody, new TypeReference<Map<String, Object>>() {});
+    }
+}
