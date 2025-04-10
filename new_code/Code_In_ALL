@@ -1,0 +1,185 @@
+public abstract class BaseShjProcessor<Req, Resp> extends ShjRequestProcessor<Req, Resp> {
+    
+    @Value("${SFHC.apic.producer_url}")
+    protected String serviceUrl;
+    
+    protected BaseShjProcessor(ObjectMapper objectMapper, RestTemplate restTemplate) {
+        super(objectMapper, restTemplate);
+    }
+
+    protected void validateCommonRequest(ShjRequest request, String transactionId) {
+        request.getShj().forEach(shj -> {
+            ShjRequest.ShjMember member = shj.getShjMember();
+            if (member == null || member.getMemberIdentifier() == null) {
+                throw new ValidationException("Member identifier is missing");
+            }
+            if(StringUtils.isBlank(member.getMemberIdentifier().getMembershipId())) {
+                throw new ValidationException("Membership ID is missing");
+            }
+            if(member.getShjTask() == null || member.getShjTask().getCareManagementStaffer()== null) {
+                throw new ValidationException("Shj Task information is missing");
+            }
+        });
+    }
+
+    protected ResponseEntity<?> processCompositeResponse(ResponseEntity<?> response, 
+                                                       String transactionId,
+                                                       Function<CompositeResponse, Boolean> successHandler) {
+        if (response.getBody() == null) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Response body is null from SHJ Service");
+        }
+
+        Map<String, Object> responseMap = new HashMap<>();
+        boolean hasError = false;
+
+        for (CompositeResponse compositeResponse : response.getBody().getCompositeResponse()) {
+            if (compositeResponse.hasErrors()) {
+                responseMap.put(compositeResponse.getReferenceId() + "_error", compositeResponse.getErrors());
+                responseMap.put("httpStatusCode", compositeResponse.getHttpStatusCode());
+                responseMap.put("transactionId", transactionId);
+                hasError = true;
+            } else {
+                successHandler.apply(compositeResponse);
+            }
+        }
+
+        return hasError ? 
+            ResponseEntity.badRequest().body(responseMap) : 
+            ResponseEntity.ok(responseMap);
+    }
+}
+
+
+===============================================
+
+@Service
+public class VerifyMemberProcessor extends BaseShjProcessor<ShjCompositeReqForVerifyMember, ShjCompositeResponseForVerifyMember> {
+
+    @Autowired
+    private CaseProcessor caseProcessor;
+
+    public VerifyMemberProcessor(ObjectMapper objectMapper, RestTemplate restTemplate) {
+        super(objectMapper, restTemplate);
+    }
+
+    @Override
+    protected void validateRequest(ShjRequest request, String transactionId) {
+        validateCommonRequest(request, transactionId);
+        request.getShj().forEach(shj -> {
+            if (!"new".equalsIgnoreCase(shj.getShjMember().getShjCase().getCaseAction())) {
+                throw new ValidationException("Invalid case action for Verify Member");
+            }
+        });
+    }
+
+    @Override
+    protected ShjCompositeReqForVerifyMember buildServiceRequest(ShjRequest request, String transactionId) {
+        return request.getShj().stream()
+                .findFirst()
+                .map(this::buildVerifyMemberRequest)
+                .orElseThrow(() -> new ValidationException("No valid Verify Member request found"));
+    }
+
+    private ShjCompositeReqForVerifyMember buildVerifyMemberRequest(ShjRequest.Shj shj) {
+        ShjCompositeReqForVerifyMember request = new ShjCompositeReqForVerifyMember();
+        request.setCompositeRequest(List.of(
+            createReqForVerifyMember(
+                VerifyMemberConstants.GET_METHOD,
+                VerifyMemberConstants.MEMBER_PLAN_URL.replace(
+                    VerifyMemberConstants.External_ID__c, 
+                    encodeId(shj.getShjMember().getMemberIdentifier().getMembershipId())
+                ),
+                VerifyMemberConstants.REFRESH_MEMBER_PLAN
+            )
+        ));
+        return request;
+    }
+
+    @Override
+    protected ResponseEntity<?> executeServiceCall(ShjCompositeReqForVerifyMember request, 
+                                                 HttpHeaders headers, 
+                                                 String transactionId) {
+        try {
+            HttpEntity<ShjCompositeReqForVerifyMember> entity = new HttpEntity<>(request, headers);
+            ResponseEntity<ShjCompositeResponseForVerifyMember> response = restTemplate.exchange(
+                serviceUrl, HttpMethod.POST, entity, ShjCompositeResponseForVerifyMember.class);
+                
+            return processCompositeResponse(response, transactionId, this::handleSuccessResponse);
+        } catch (Exception e) {
+            throw new ServiceException("Verify Member service call failed: " + e.getMessage(), 
+                                     HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    private Boolean handleSuccessResponse(CompositeResponse compositeResponse) {
+        ShjCompositeResponseForVerifyMember.Body body = compositeResponse.getBody();
+        if (body != null && body.getRecords() != null && !body.getRecords().isEmpty() && body.getTotalSize() > 0) {
+            // Handle successful response
+            return true;
+        } else if (compositeResponse.getHttpStatusCode() == 200 && body.getTotalSize() == 0) {
+            // Handle no records found
+            return false;
+        }
+        return false;
+    }
+}
+
+========================================================
+
+@RestController
+public class ShjController {
+    private final ObjectMapper objectMapper;
+    private final TaskProcessor taskProcessor;
+    private final VerifyMemberProcessor verifyMemberProcessor;
+    private final CaseProcessor caseProcessor;
+    private final OdmService odmService;
+    private final PayloadTransformer payloadTransformer;
+    private final MembersHelper memberHelper;
+
+    @Value("${ODM.apic.url}")
+    private String apiUrl;
+
+    @PostMapping(value = "/shjprocess", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> processShjFile(@RequestParam("file") MultipartFile file) {
+        String transactionId = UUID.randomUUID().toString();
+        HttpHeaders headers = memberHelper.buildHttpHeader();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        try {
+            ShjRequest request = objectMapper.readValue(file.getBytes(), ShjRequest.class);
+            Map<String, Object> transformedPayload = payloadTransformer.transformPayload(request, transactionId);
+            
+            ResponseEntity<OdmResponse> odmResponse = odmService.callOdmService(
+                apiUrl, 
+                objectMapper.writeValueAsString(transformedPayload), 
+                transactionId, 
+                headers
+            );
+
+            if (odmResponse.getBody() == null) {
+                throw new ServiceException("ODM response is empty", HttpStatus.INTERNAL_SERVER_ERROR);
+            }
+
+            String caseAction = request.getShj().get(0).getShjMember().getShjCase().getCaseAction();
+            boolean shouldCreateTask = odmResponse.getBody().getOpportunityResponseDetails()
+                                              .getShjOpportunityDetails()
+                                              .getCreateTask();
+
+            if ("update".equalsIgnoreCase(caseAction) && shouldCreateTask) {
+                return taskProcessor.process(request, transactionId, headers);
+            } else if ("new".equalsIgnoreCase(caseAction)) {
+                ResponseEntity<?> verifyResponse = verifyMemberProcessor.process(request, transactionId, headers);
+                // Add logic to handle verify response and call case processor if needed
+            }
+            
+            throw new ValidationException("Invalid case action or ODM response: " + caseAction);
+        } catch (IOException e) {
+            throw new ValidationException("Invalid File Content: " + e.getMessage());
+        } catch (Exception e) {
+            throw new RuntimeException("Processing failed: " + e.getMessage(), e);
+        }
+    }
+}
+
+================================================
