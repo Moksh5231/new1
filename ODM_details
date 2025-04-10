@@ -1,0 +1,80 @@
+ODM
+------
+{
+  "__DecisionID__": "SampleDecision",
+  "ONECMSHJOpportunityRequest": {
+    "transactionId": "987654321",
+    "specVersion": "1.0",
+    "shjMember": {
+      "memberIdentifier": {
+        "membershipId": "59~101576374401+Z00000000003017+2025-01-01",
+        "proxyId": "15~R8WJBQBBBPXZ"
+      },
+      "programName": "Community Care",
+      "shjCase": {
+        "shjID": "None",
+        "shjTxnID": "00fa3431-44d6-4e78-8e73-a0b6115f54da",
+        "caseAction": "New",
+        "caseReason": "IFP-Complex",
+        "shjTask": {
+          "careManagementStaffer": {
+            "assignedUserId": "A123457",
+            "assignedUserIdType": null,
+            "assignedUserName": "Beth Mullett",
+            "assignedUserRole": null,
+            "assignedUserEmail": null,
+            "assignedUserPhone": null
+          },
+          "comments": "Random comments",
+          "dueDate": "2024-01-21",
+          "priority": "Escalated",
+          "subject": "IFP-Complex Reidentification",
+          "taskRecordType": "Clinical_Smart_Health_Journey",
+          "whatId": "1234567890"
+        },
+        "personalizedContent": {
+          "identityType": "Risk statification high"
+        },
+        "shjOpptyCreationDt": "2024-01-23T00:00:00Z",
+        "shjOpptyUpdatedDt": "2024-01-23T00:00:00Z",
+        "shjEventTransactionDt": "2025-02-04T15:58:24.780786600Z"
+      }
+    },
+    "deliveryChannel": "CEC"
+  }
+}
+
+----------------------------------
+
+SHJ:
+----
+{
+  "shj": [
+    {
+      "specVersion": "1.0",
+      "shjMember": {
+        "memberIdentifier": {
+          "membershipId": "5~180017750+10+2+20050401+742188+W+77",
+          "proxyId": "15~HTRBABCD"
+        },
+        "programName": "Community Care",
+        "shjCase": {
+          "shjID": "fa9fb976-7a55-4149-86ac-2bda70df2e0d",
+          "caseAction": "Update",
+		  "caseReason": "IFP Complex"
+        },
+        "shjTask": {
+          "careManagementStaffer": {
+            "assignedUserId": "A232472"
+          },
+          "comments": "Case Status In MedCompass Has Changed for Member",
+          "dueDate": "2024-01-31",
+          "priority": "High",
+          "status": "Identified",
+          "subject": "Case Status In MC Changed"
+        }
+      },
+      "deliveryChannel": "1CM"
+    }
+  ]
+}
