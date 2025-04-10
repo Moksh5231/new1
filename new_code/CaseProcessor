@@ -1,0 +1,242 @@
+package com.aetna.clinical.exceptionhandler;
+
+import com.aetna.clinical.constant.CaseConstants;
+import com.aetna.clinical.pojo.csr.ReqForCase;
+import com.aetna.clinical.pojo.csr.ShjCompositeReqForCase;
+import com.aetna.clinical.pojo.csr.ShjCompositeResponseForCase;
+import com.aetna.clinical.pojo.taskrequest.ShjRequest;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.common.util.StringUtils;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.*;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+
+@Service
+public class CaseProcessor extends ShjRequestProcessor<ShjCompositeReqForCase, ShjCompositeResponseForCase> {
+
+    @Value("${SFHC.apic.producer_url}")
+    private String serviceUrl;
+
+    public CaseProcessor(ObjectMapper objectMapper, RestTemplate restTemplate) {
+        super(objectMapper, restTemplate);
+    }
+
+    /*public CaseProcessor() {
+        super();
+    }*/
+
+    @Override
+    protected void validateRequest(ShjRequest request, String transactionId) {
+        request.getShj().forEach(shj -> {
+            if (!"new".equalsIgnoreCase(shj.getShjMember().getShjCase().getCaseAction())) {
+                throw new ValidationException("Invalid case action for Case Processor");
+            }
+
+            ShjRequest.ShjMember member = shj.getShjMember();
+            if (member == null || member.getMemberIdentifier() == null) {
+                throw new ValidationException("Member identifier is missing");
+            }
+            if(StringUtils.isBlank(member.getMemberIdentifier().getMembershipId())) {
+                throw new ValidationException("Membership ID is missing");
+            }
+            if(member.getShjTask() == null || member.getShjTask().getCareManagementStaffer()== null) {
+                throw new ValidationException("Shj Task information is missing");
+            }
+        });
+    }
+
+    @Override
+    protected ShjCompositeReqForCase buildServiceRequest(ShjRequest request, String transactionId) {
+        return request.getShj().stream()
+                .findFirst()
+                .map(this::buildCaseRequest)
+                .orElseThrow(() -> new ValidationException("No valid case request found"));
+    }
+
+    private ShjCompositeReqForCase buildCaseRequest(ShjRequest.Shj shj) {
+        ShjCompositeReqForCase caseRequest = new ShjCompositeReqForCase();
+        List<ReqForCase> requests = new ArrayList<>();
+
+        requests.add(buildMemberPlanRequest(shj));
+        requests.add(buildAccountRequest(shj));
+        requests.add(buildCaseUpdateRequest(shj));
+        requests.add(buildCsrRequest(shj));
+        requests.add(buildCsrDetailsRequest(shj));
+
+        caseRequest.setCompositeRequest(requests);
+        return caseRequest;
+
+    }
+
+    private ReqForCase buildCsrDetailsRequest(ShjRequest.Shj shj) {
+        // Build the CSR details request here
+        Map<String, Object> csrdBody = createCsrdBody();
+        return createReqForCase(CaseConstants.POST_METHOD,
+                CaseConstants.CSRDetails_Url,
+                CaseConstants.Reference_CSRDetails,
+                csrdBody);
+    }
+
+    private Map<String, Object> createCsrdBody() {
+        Map<String, Object> body = new HashMap<>();
+        body.put(CaseConstants.CSRDetails_RecordType_CSR_Id, CaseConstants.CSRDetails_RecordType_CSR_Id_Value);
+
+        return body;
+    }
+
+    private ReqForCase buildCsrRequest(ShjRequest.Shj shj) {
+        // Build the CSR request here
+        Map<String, Object> csrBody = createCsrBody(shj);
+
+        return createReqForCase(CaseConstants.PATCH_METHOD,
+                CaseConstants.CSR_Url.replace(CaseConstants.CSR_External_ID_SHJ__c, shj.getShjMember().getShjCase().getShjID().replace("+", "%2B")),
+                CaseConstants.Reference_CSR_ID, csrBody);
+
+
+    }
+
+    private Map<String, Object> createCsrBody(ShjRequest.Shj shj) {
+        Map<String, Object> body = new HashMap<>();
+        Map<String, String> recordType = new HashMap<>();
+        recordType.put(CaseConstants.CSR_RecordType_Name, CaseConstants.CSR_RecordType_Name_Value);
+        body.put(CaseConstants.RecordType, recordType);
+        body.put(CaseConstants.CSR_PatientId, CaseConstants.CSR_PatientId_Value);
+        body.put(CaseConstants.CSR_Case__c, CaseConstants.CSR_Case__c_Value);
+        body.put(CaseConstants.CSR_Type, CaseConstants.CSR_Type_Value);
+        body.put(CaseConstants.CSR_SourceSystem, CaseConstants.CSR_SourceSystem_Value);
+        body.put(CaseConstants.CSR_Status, getShjCasePropertyForShjTask(shj, ShjRequest.ShjTask::getStatus)); // change
+        body.put(CaseConstants.CSR_Priority, getShjCasePropertyForShjTask(shj, ShjRequest.ShjTask::getPriority)); //Change
+
+        return body;
+    }
+
+    private ReqForCase buildCaseUpdateRequest(ShjRequest.Shj shj) {
+
+        // Build the case update request here
+        Map<String, Object> caseBody = createCaseBody(shj);
+
+        return createReqForCase(CaseConstants.PATCH_METHOD,
+                CaseConstants.Case_Url.replace(CaseConstants.CASE_External_ID_SHJ__c, shj.getShjMember().getShjCase().getShjID().replace("+", "%2B")),
+                CaseConstants.Reference_CASE,
+                caseBody);
+
+    }
+
+    private Map<String, Object> createCaseBody(ShjRequest.Shj shj) {
+        Map<String, Object> body = new HashMap<>();
+        Map<String, String> recordType = new HashMap<>();
+        recordType.put(CaseConstants.Case_RecordType_Name, CaseConstants.Case_RecordType_Name_Value);
+        body.put(CaseConstants.RecordType, recordType);
+        body.put(CaseConstants.Case_AccountId, CaseConstants.Case_AccountId_Value);
+        body.put(CaseConstants.Case_Member_Plan__c, CaseConstants.Case_Member_Plan__c_Value);
+        body.put(CaseConstants.Case_Origin, CaseConstants.Case_Origin_Value);
+        body.put(CaseConstants.Case_Type, CaseConstants.Case_Type_Value);
+
+        body.put(CaseConstants.Case_Reason, getShjCasePropertyForShjCase(shj, ShjRequest.ShjCase::getCaseReason)); // change
+        body.put(CaseConstants.Case_Priority, getShjCasePropertyForShjTask(shj, ShjRequest.ShjTask::getPriority)); // change
+        body.put(CaseConstants.Case_Status, getShjCasePropertyForShjTask(shj, ShjRequest.ShjTask::getStatus)); // change
+        return body;
+    }
+
+    private <T> T getShjCasePropertyForShjCase(ShjRequest.Shj shj, Function<ShjRequest.ShjCase, T> propertyExtractor) {
+        if(shj == null){
+            return null;
+        }
+        ShjRequest.ShjMember member = shj.getShjMember();
+        if (member == null) {
+            return null;
+        }
+        ShjRequest.ShjCase shjCase = member.getShjCase();
+        if (shjCase == null) {
+            return null;
+        }
+        return propertyExtractor.apply(shjCase);
+    }
+
+    private <T> T getShjCasePropertyForShjTask(ShjRequest.Shj shj, Function<ShjRequest.ShjTask, T> propertyExtractor) {
+        if(shj == null){
+            return null;
+        }
+        ShjRequest.ShjMember member = shj.getShjMember();
+        if (member == null) {
+            return null;
+        }
+        ShjRequest.ShjTask shjTask = member.getShjTask();
+        if (shjTask == null) {
+            return null;
+        }
+        return propertyExtractor.apply(shjTask);
+    }
+
+    private ReqForCase buildAccountRequest(ShjRequest.Shj shj) {
+        // Build the account request here
+        return createReqForCase(CaseConstants.GET_METHOD,
+                CaseConstants.Account_Url.replace(CaseConstants.External_ID__c, shj.getShjMember().getMemberIdentifier().getProxyId()),
+                CaseConstants.Reference_ACCOUNT_ID, null);
+    }
+
+    private ReqForCase buildMemberPlanRequest(ShjRequest.Shj shj) {
+        // Build the member plan request here
+        return createReqForCase(CaseConstants.GET_METHOD,
+                CaseConstants.Member_Plan_url.replace(CaseConstants.CMM_External_Id__c, shj.getShjMember().getMemberIdentifier().getMembershipId().replace("+", "%2B")),
+                CaseConstants.Reference_MEMBER_PLAN_ID, null);
+    }
+
+    private ReqForCase createReqForCase(String method, String url, String referenceId, Map<String, Object> body) {
+        ReqForCase reqForCase = new ReqForCase();
+        reqForCase.setMethod(method);
+        reqForCase.setUrl(url);
+        reqForCase.setReferenceId(referenceId);
+        reqForCase.setBody(body);
+        return reqForCase;
+    }
+
+    private String encodeId(String membershipId) {
+        return membershipId.replace("+", "%20");
+    }
+
+    @Override
+    protected ResponseEntity<?> executeServiceCall(ShjCompositeReqForCase request, HttpHeaders headers, String transactionId) {
+        try {
+           // String requestBody = objectMapper.writeValueAsString(request);
+            HttpEntity<ShjCompositeReqForCase> entity = new HttpEntity<>(request, headers);
+
+            ResponseEntity<ShjCompositeResponseForCase> response =
+                    restTemplate.exchange(serviceUrl + "/case", HttpMethod.POST, entity, ShjCompositeResponseForCase.class);
+
+            return processCaseResponse(response,transactionId);
+        } catch (Exception e) {
+            throw new ServiceException("Error executing Case service call: " + e.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    private ResponseEntity<?> processCaseResponse(ResponseEntity<ShjCompositeResponseForCase> response, String transactionId) {
+        if(response.getBody() == null) {
+            throw new ServiceException("Empty Response from Case Service", HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+        Map<String, Object> result = new HashMap<>();
+        for (ShjCompositeResponseForCase.CompositeResponse item : response.getBody().getCompositeResponse()) {
+            if (item.getHttpStatusCode() >= 400) {
+                throw new ServiceException("Case Service failed: " + item.getReferenceId(),
+                        HttpStatus.valueOf(item.getHttpStatusCode()));
+            }
+
+            if(item.getBody() == null) {
+                if(item.getBody().getRecords() != null && !item.getBody().getRecords().isEmpty()){
+                    result.put(item.getReferenceId(), item.getBody().getRecords().get(0).getId());
+                } else if(item.getBody().getId() != null) {
+                    result.put(item.getReferenceId(), item.getBody().getId());
+                }
+            }
+        }
+        result.put("status", "success");
+        return ResponseEntity.ok(result);
+    }
+}
