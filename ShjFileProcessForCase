@@ -1,0 +1,153 @@
+package com.aetna.clinical.controller;
+
+import com.aetna.clinical.constant.CaseConstants;
+import com.aetna.clinical.pojo.csr.ReqForCase;
+import com.aetna.clinical.pojo.csr.ShjCompositeReqForCase;
+import com.aetna.clinical.pojo.taskrequest.ShjRequest;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+
+import java.util.*;
+import java.util.function.Function;
+
+public class ShjFileProcessForCase {
+    @Autowired
+    ObjectMapper objectMapper;
+
+    private static final Logger logger = LoggerFactory.getLogger(ShjFileProcessForCase.class);
+
+
+    public ShjCompositeReqForCase payloadprocessForCSR(String filePayload, String transactionId, ShjRequest shjRequest) {
+        logger.info(" inside the payload process method with transaction id :{}", transactionId);
+
+        return shjRequest.getShj().stream()
+                .filter(shj -> Optional.ofNullable(shj)
+                        .map(ShjRequest.Shj::getShjMember)
+                        .map(member -> member.getMemberIdentifier() != null && "new".equalsIgnoreCase(member.getShjCase().getCaseAction()))
+                        .orElse(false))
+                .findFirst()
+                .map(shj -> createCompositeRequestForCase(shj, transactionId))
+                .orElse(null);
+    }
+
+    /**
+     * Creates a composite request for SHJ case processing.
+     *
+     * @param shj          The SHJ object containing member and case information.
+     * @param transactionId The transaction ID for logging purposes.
+     * @return A ShjCompositeReqForCase object containing the composite request.
+     */
+    private ShjCompositeReqForCase createCompositeRequestForCase(ShjRequest.Shj shj, String transactionId) {
+        ShjCompositeReqForCase shjCompositeReqForCase = new ShjCompositeReqForCase();
+        List<ReqForCase> reqForCaseList = new ArrayList<>();
+
+        reqForCaseList.add(createReqForCase(CaseConstants.GET_METHOD,
+                CaseConstants.Member_Plan_url.replace(CaseConstants.CMM_External_Id__c, shj.getShjMember().getMemberIdentifier().getMembershipId().replace("+", "%2B")),
+                CaseConstants.Reference_MEMBER_PLAN_ID, null));
+
+        reqForCaseList.add(createReqForCase(CaseConstants.GET_METHOD,
+                CaseConstants.Account_Url.replace(CaseConstants.External_ID__c, shj.getShjMember().getMemberIdentifier().getProxyId()),
+                CaseConstants.Reference_ACCOUNT_ID, null));
+
+        Map<String, Object> caseBody = createCaseBody(shj);
+        reqForCaseList.add(createReqForCase(CaseConstants.PATCH_METHOD,
+                CaseConstants.Case_Url.replace(CaseConstants.CASE_External_ID_SHJ__c, shj.getShjMember().getShjCase().getShjID().replace("+", "%2B")),
+                CaseConstants.Reference_CASE, caseBody));
+
+        Map<String, Object> csrBody = createCsrBody(shj);
+        reqForCaseList.add(createReqForCase(CaseConstants.PATCH_METHOD,
+                CaseConstants.CSR_Url.replace(CaseConstants.CSR_External_ID_SHJ__c, shj.getShjMember().getShjCase().getShjID().replace("+", "%2B")),
+                CaseConstants.Reference_CSR_ID, csrBody));
+
+        Map<String, Object> csrdBody = createCsrdBody();
+        reqForCaseList.add(createReqForCase(CaseConstants.POST_METHOD,
+                CaseConstants.CSRDetails_Url,
+                CaseConstants.Reference_CSRDetails, csrdBody));
+
+        shjCompositeReqForCase.setCompositeRequest(reqForCaseList);
+        return shjCompositeReqForCase;
+    }
+
+    private ReqForCase createReqForCase(String method, String url, String referenceId, Map<String, Object> body) {
+        ReqForCase reqForCase = new ReqForCase();
+        reqForCase.setMethod(method);
+        reqForCase.setUrl(url);
+        reqForCase.setReferenceId(referenceId);
+        reqForCase.setBody(body);
+        return reqForCase;
+    }
+
+    private Map<String, Object> createCaseBody(ShjRequest.Shj shj) {
+        Map<String, Object> body = new HashMap<>();
+        Map<String, String> recordType = new HashMap<>();
+        recordType.put(CaseConstants.Case_RecordType_Name, CaseConstants.Case_RecordType_Name_Value);
+        body.put(CaseConstants.RecordType, recordType);
+        body.put(CaseConstants.Case_AccountId, CaseConstants.Case_AccountId_Value);
+        body.put(CaseConstants.Case_Member_Plan__c, CaseConstants.Case_Member_Plan__c_Value);
+        body.put(CaseConstants.Case_Origin, CaseConstants.Case_Origin_Value);
+        body.put(CaseConstants.Case_Type, CaseConstants.Case_Type_Value);
+        //body.put(CaseConstants.Case_Description, CaseConstants.Case_Description_Value);
+        //body.put(CaseConstants.Case_Language, CaseConstants.Case_Language_Value);
+        // body.put(CaseConstants.Case_Subject, CaseConstants.Case_Subject_Value);
+
+        body.put(CaseConstants.Case_Reason, getShjCasePropertyForShjCase(shj, ShjRequest.ShjCase::getCaseReason)); // change
+        body.put(CaseConstants.Case_Priority, getShjCasePropertyForShjTask(shj, ShjRequest.ShjTask::getPriority)); // change
+        body.put(CaseConstants.Case_Status, getShjCasePropertyForShjTask(shj, ShjRequest.ShjTask::getStatus)); // change
+        return body;
+    }
+
+    private <T> T getShjCasePropertyForShjTask(ShjRequest.Shj shj, Function<ShjRequest.ShjTask, T> propertyExtractor) {
+        if(shj == null){
+            return null;
+        }
+        ShjRequest.ShjMember member = shj.getShjMember();
+        if (member == null) {
+            return null;
+        }
+        ShjRequest.ShjTask shjTask = member.getShjTask();
+        if (shjTask == null) {
+            return null;
+        }
+        return propertyExtractor.apply(shjTask);
+    }
+
+    private <T> T getShjCasePropertyForShjCase(ShjRequest.Shj shj, Function<ShjRequest.ShjCase, T> propertyExtractor) {
+        if(shj == null){
+            return null;
+        }
+        ShjRequest.ShjMember member = shj.getShjMember();
+        if (member == null) {
+            return null;
+        }
+        ShjRequest.ShjCase shjCase = member.getShjCase();
+        if (shjCase == null) {
+            return null;
+        }
+        return propertyExtractor.apply(shjCase);
+    }
+
+    private Map<String, Object> createCsrBody(ShjRequest.Shj shj) {
+        Map<String, Object> body = new HashMap<>();
+        Map<String, String> recordType = new HashMap<>();
+        recordType.put(CaseConstants.CSR_RecordType_Name, CaseConstants.CSR_RecordType_Name_Value);
+        body.put(CaseConstants.RecordType, recordType);
+        body.put(CaseConstants.CSR_PatientId, CaseConstants.CSR_PatientId_Value);
+        body.put(CaseConstants.CSR_Case__c, CaseConstants.CSR_Case__c_Value);
+        body.put(CaseConstants.CSR_Type, CaseConstants.CSR_Type_Value);
+        body.put(CaseConstants.CSR_SourceSystem, CaseConstants.CSR_SourceSystem_Value);
+        body.put(CaseConstants.CSR_Status, getShjCasePropertyForShjTask(shj, ShjRequest.ShjTask::getStatus)); // change
+        body.put(CaseConstants.CSR_Priority, getShjCasePropertyForShjTask(shj, ShjRequest.ShjTask::getPriority)); //Change
+      //  body.put(CaseConstants.CSR_PatientInstruction, CaseConstants.CSR_PatientInstruction_Value);
+        return body;
+    }
+
+    private Map<String, Object> createCsrdBody() {
+        Map<String, Object> body = new HashMap<>();
+        body.put(CaseConstants.CSRDetails_RecordType_CSR_Id, CaseConstants.CSRDetails_RecordType_CSR_Id_Value);
+        //body.put(CaseConstants.CSRD_DetailType, CaseConstants.CSRD_DetailType_Value);
+        return body;
+    }
+
+}
