@@ -1,0 +1,456 @@
+package com.aetna.clinical.pojo.taskrequest;
+
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import jakarta.validation.constraints.NotNull;
+import java.util.List;
+
+public class ShjRequest {
+
+    @NotNull
+    @JsonProperty("shj")
+    private List<Shj> shj;
+
+    @JsonCreator
+    public ShjRequest(@JsonProperty("shj") List<Shj> shj) {
+        this.shj = shj;
+    }
+
+    public List<Shj> getShj() {
+        return shj;
+    }
+
+    public void setShj(List<Shj> shj) {
+        this.shj = shj;
+    }
+
+    public static class Shj {
+        @NotNull
+        private String specVersion;
+
+        @NotNull
+        private ShjMember shjMember;
+
+        @NotNull
+        private String deliveryChannel;
+
+        @JsonCreator
+        public Shj(@JsonProperty("specVersion") String specVersion,
+                   @JsonProperty("shjMember") ShjMember shjMember,
+                   @JsonProperty("deliveryChannel") String deliveryChannel) {
+            this.specVersion = specVersion;
+            this.shjMember = shjMember;
+            this.deliveryChannel = deliveryChannel;
+        }
+
+        public String getSpecVersion() {
+            return specVersion;
+        }
+
+        public void setSpecVersion(String specVersion) {
+            this.specVersion = specVersion;
+        }
+
+        public ShjMember getShjMember() {
+            return shjMember;
+        }
+
+        public void setShjMember(ShjMember shjMember) {
+            this.shjMember = shjMember;
+        }
+
+        public String getDeliveryChannel() {
+            return deliveryChannel;
+        }
+
+        public void setDeliveryChannel(String deliveryChannel) {
+            this.deliveryChannel = deliveryChannel;
+        }
+    }
+
+    public static class ShjMember {
+        @NotNull
+        private MemberIdentifier memberIdentifier;
+
+        @NotNull
+        private String programName;
+
+        @NotNull
+        private ShjCase shjCase;
+
+        @NotNull
+        private ShjTask shjTask;
+
+        @JsonCreator
+        public ShjMember(@JsonProperty("memberIdentifier") MemberIdentifier memberIdentifier,
+                         @JsonProperty("programName") String programName,
+                         @JsonProperty("shjCase") ShjCase shjCase,
+                         @JsonProperty("shjTask") ShjTask shjTask) {
+            this.memberIdentifier = memberIdentifier;
+            this.programName = programName;
+            this.shjCase = shjCase;
+            this.shjTask = shjTask;
+        }
+
+        public MemberIdentifier getMemberIdentifier() {
+            return memberIdentifier;
+        }
+
+        public void setMemberIdentifier(MemberIdentifier memberIdentifier) {
+            this.memberIdentifier = memberIdentifier;
+        }
+
+        public String getProgramName() {
+            return programName;
+        }
+
+        public void setProgramName(String programName) {
+            this.programName = programName;
+        }
+
+        public ShjCase getShjCase() {
+            return shjCase;
+        }
+
+        public void setShjCase(ShjCase shjCase) {
+            this.shjCase = shjCase;
+        }
+
+        public ShjTask getShjTask() {
+            return shjTask;
+        }
+
+        public void setShjTask(ShjTask shjTask) {
+            this.shjTask = shjTask;
+        }
+    }
+
+    public static class MemberIdentifier {
+        @NotNull
+        private String membershipId;
+
+        @NotNull
+        private String proxyId;
+
+        @JsonCreator
+        public MemberIdentifier(@JsonProperty("membershipId") String membershipId,
+                                @JsonProperty("proxyId") String proxyId) {
+            this.membershipId = membershipId;
+            this.proxyId = proxyId;
+        }
+
+        public String getMembershipId() {
+            return membershipId;
+        }
+
+        public void setMembershipId(String membershipId) {
+            this.membershipId = membershipId;
+        }
+
+        public String getProxyId() {
+            return proxyId;
+        }
+
+        public void setProxyId(String proxyId) {
+            this.proxyId = proxyId;
+        }
+    }
+
+    public static class ShjCase {
+        @NotNull
+        private String shjID;
+
+        private String shjTxnID;
+
+        @NotNull
+        private String caseAction;
+
+        private String caseReason;
+
+        private ShjTask shjTask;
+
+        private String personalizedContent;
+
+        private String shjOpptyCreationDt;
+
+        private String shjOpptyUpdatedDt;
+
+        private String shjEventTransactionDt;
+
+        @JsonCreator
+        public ShjCase(@JsonProperty("shjID") String shjID,
+                       @JsonProperty("shjTxnID") String shjTxnID,
+                       @JsonProperty("caseAction") String caseAction,
+                       @JsonProperty("caseReason") String caseReason,
+                       @JsonProperty("shjTask") ShjTask shjTask,
+                       @JsonProperty("personalizedContent") String personalizedContent,
+                       @JsonProperty("shjOpptyCreationDt") String shjOpptyCreationDt,
+                       @JsonProperty("shjOpptyUpdatedDt") String shjOpptyUpdatedDt,
+                       @JsonProperty("shjEventTransactionDt") String shjEventTransactionDt) {
+            this.shjID = shjID;
+            this.shjTxnID = shjTxnID;
+            this.caseAction = caseAction;
+            this.caseReason = caseReason;
+            this.shjTask = shjTask;
+            this.personalizedContent = personalizedContent;
+            this.shjOpptyCreationDt = shjOpptyCreationDt;
+            this.shjOpptyUpdatedDt = shjOpptyUpdatedDt;
+            this.shjEventTransactionDt = shjEventTransactionDt;
+        }
+
+        public String getShjID() {
+            return shjID;
+        }
+
+        public void setShjID(String shjID) {
+            this.shjID = shjID;
+        }
+
+        public String getShjTxnID() {
+            return shjTxnID;
+        }
+
+        public void setShjTxnID(String shjTxnID) {
+            this.shjTxnID = shjTxnID;
+        }
+
+        public String getCaseAction() {
+            return caseAction;
+        }
+
+        public void setCaseAction(String caseAction) {
+            this.caseAction = caseAction;
+        }
+
+        public String getCaseReason() {
+            return caseReason;
+        }
+
+        public void setCaseReason(String caseReason) {
+            this.caseReason = caseReason;
+        }
+
+        public ShjTask getShjTask() {
+            return shjTask;
+        }
+
+        public void setShjTask(ShjTask shjTask) {
+            this.shjTask = shjTask;
+        }
+
+        public String getPersonalizedContent() {
+            return personalizedContent;
+        }
+
+        public void setPersonalizedContent(String personalizedContent) {
+            this.personalizedContent = personalizedContent;
+        }
+
+        public String getShjOpptyCreationDt() {
+            return shjOpptyCreationDt;
+        }
+
+        public void setShjOpptyCreationDt(String shjOpptyCreationDt) {
+            this.shjOpptyCreationDt = shjOpptyCreationDt;
+        }
+
+        public String getShjOpptyUpdatedDt() {
+            return shjOpptyUpdatedDt;
+        }
+
+        public void setShjOpptyUpdatedDt(String shjOpptyUpdatedDt) {
+            this.shjOpptyUpdatedDt = shjOpptyUpdatedDt;
+        }
+
+        public String getShjEventTransactionDt() {
+            return shjEventTransactionDt;
+        }
+
+        public void setShjEventTransactionDt(String shjEventTransactionDt) {
+            this.shjEventTransactionDt = shjEventTransactionDt;
+        }
+    }
+
+    public static class ShjTask {
+        @NotNull
+        private CareManagementStaffer careManagementStaffer;
+
+        @NotNull
+        private String comments;
+        @NotNull
+        private String dueDate;
+
+        @NotNull
+        private String priority;
+        @NotNull
+        private String subject;
+
+        @NotNull
+        private String status;
+
+        private String taskRecordType;
+
+        private String whatId;
+
+        @JsonCreator
+        public ShjTask(@JsonProperty("careManagementStaffer") CareManagementStaffer careManagementStaffer,
+                       @JsonProperty("comments") String comments,
+                       @JsonProperty("dueDate") String dueDate,
+                       @JsonProperty("priority") String priority,
+                       @JsonProperty("status") String status,
+                       @JsonProperty("subject") String subject,
+                       @JsonProperty("taskRecordType") String taskRecordType,
+                       @JsonProperty("whatId") String whatId) {
+            this.careManagementStaffer = careManagementStaffer;
+            this.comments = comments;
+            this.dueDate = dueDate;
+            this.priority = priority;
+            this.status = status;
+            this.subject = subject;
+            this.taskRecordType = taskRecordType;
+            this.whatId = whatId;
+        }
+
+        public CareManagementStaffer getCareManagementStaffer() {
+            return careManagementStaffer;
+        }
+
+        public void setCareManagementStaffer(CareManagementStaffer careManagementStaffer) {
+            this.careManagementStaffer = careManagementStaffer;
+        }
+
+        public String getComments() {
+            return comments;
+        }
+
+        public void setComments(String comments) {
+            this.comments = comments;
+        }
+
+        public String getDueDate() {
+            return dueDate;
+        }
+
+        public void setDueDate(String dueDate) {
+            this.dueDate = dueDate;
+        }
+
+        public String getPriority() {
+            return priority;
+        }
+
+        public void setPriority(String priority) {
+            this.priority = priority;
+        }
+
+        public String getStatus() {
+            return status;
+        }
+
+        public void setStatus(String status) {
+            this.status = status;
+        }
+
+        public String getSubject() {
+            return subject;
+        }
+
+        public void setSubject(String subject) {
+            this.subject = subject;
+        }
+
+        public String getTaskRecordType() {
+            return taskRecordType;
+        }
+
+        public void setTaskRecordType(String taskRecordType) {
+            this.taskRecordType = taskRecordType;
+        }
+
+        public String getWhatId() {
+            return whatId;
+        }
+
+        public void setWhatId(String whatId) {
+            this.whatId = whatId;
+        }
+    }
+
+    public static class CareManagementStaffer {
+        @NotNull
+        private String assignedUserId;
+
+        private String assignedUserIdType;
+
+        private String assignedUserName;
+
+        private String assignedUserRole;
+
+        private String assignedUserEmail;
+
+        private String assignedUserPhone;
+
+        @JsonCreator
+        public CareManagementStaffer(@JsonProperty("assignedUserId") String assignedUserId,
+                                     @JsonProperty("assignedUserIdType") String assignedUserIdType,
+                                     @JsonProperty("assignedUserName") String assignedUserName,
+                                     @JsonProperty("assignedUserRole") String assignedUserRole,
+                                     @JsonProperty("assignedUserEmail") String assignedUserEmail,
+                                     @JsonProperty("assignedUserPhone") String assignedUserPhone) {
+            this.assignedUserId = assignedUserId;
+            this.assignedUserIdType = assignedUserIdType;
+            this.assignedUserName = assignedUserName;
+            this.assignedUserRole = assignedUserRole;
+            this.assignedUserEmail = assignedUserEmail;
+            this.assignedUserPhone = assignedUserPhone;
+        }
+
+        public String getAssignedUserId() {
+            return assignedUserId;
+        }
+
+        public void setAssignedUserId(String assignedUserId) {
+            this.assignedUserId = assignedUserId;
+        }
+
+        public String getAssignedUserIdType() {
+            return assignedUserIdType;
+        }
+
+        public void setAssignedUserIdType(String assignedUserIdType) {
+            this.assignedUserIdType = assignedUserIdType;
+        }
+
+        public String getAssignedUserName() {
+            return assignedUserName;
+        }
+
+        public void setAssignedUserName(String assignedUserName) {
+            this.assignedUserName = assignedUserName;
+        }
+
+        public String getAssignedUserRole() {
+            return assignedUserRole;
+        }
+
+        public void setAssignedUserRole(String assignedUserRole) {
+            this.assignedUserRole = assignedUserRole;
+        }
+
+        public String getAssignedUserEmail() {
+            return assignedUserEmail;
+        }
+
+        public void setAssignedUserEmail(String assignedUserEmail) {
+            this.assignedUserEmail = assignedUserEmail;
+        }
+
+        public String getAssignedUserPhone() {
+            return assignedUserPhone;
+        }
+
+        public void setAssignedUserPhone(String assignedUserPhone) {
+            this.assignedUserPhone = assignedUserPhone;
+        }
+    }
+}
