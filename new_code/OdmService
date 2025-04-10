@@ -1,0 +1,66 @@
+package com.aetna.clinical.exceptionhandler;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
+import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.Map;
+
+@Service
+@RequiredArgsConstructor
+public class OdmService {
+    private static final Logger logger = LoggerFactory.getLogger(OdmService.class);
+
+    /*private final RestTemplate restTemplate;
+    private final ObjectMapper objectMapper;*/
+
+
+
+
+
+    public ResponseEntity<OdmResponse> callOdmService(String apiUrl,
+            String requestBody,
+            String transactionId,
+            HttpHeaders headers) throws Exception {
+
+        try {
+            logger.info("Calling ODM service at: {}", apiUrl);
+
+            RestTemplate restTemplate = new RestTemplate();
+
+
+            HttpEntity<String> membersEntity = new HttpEntity<>(requestBody, headers);
+
+           // HttpEntity<Map<String, Object>> requestEntity = new HttpEntity<>(requestBody, headers);
+
+            // Make the API call
+            ResponseEntity<OdmResponse> response = restTemplate.exchange(
+                    apiUrl,
+                    HttpMethod.POST,
+                    membersEntity,
+                    OdmResponse.class);
+
+            logger.info("ODM service response status: {}", response.getStatusCode());
+            return response;
+        } catch (Exception e) {
+            logger.error("Error calling ODM service: {}", e.getMessage(), e);
+            throw new Exception("Failed to call ODM service: " + e.getMessage(), e);
+        }
+    }
+
+    // Optional: Add method for parsing ODM response
+    /*public Map<String, Object> parseOdmResponse(String responseBody) throws JsonProcessingException {
+        return objectMapper.readValue(responseBody, new TypeReference<Map<String, Object>>() {});
+    }*/
+}
