@@ -1,0 +1,103 @@
+package com.aetna.clinical.exceptionhandler;
+
+import com.aetna.clinical.common.util.MembersHelper;
+import com.aetna.clinical.controller.SpringConfig;
+import com.aetna.clinical.pojo.taskrequest.ShjRequest;
+import com.aetna.clinical.pojo.verifymember.ShjCompositeResponseForVerifyMember;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.*;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.IOException;
+import java.util.Map;
+import java.util.UUID;
+
+@RestController
+public class ShjController {
+
+    private final ObjectMapper objectMapper;
+
+    private final TaskProcessor taskProcessor;
+
+    private VerifyMemberProcessor verifyMemberProcessor;
+
+    //private  OdmService odmService;
+
+   // private PayloadTransformer payloadTransformer;
+
+    @Value("${ODM.apic.url}")
+    private String apiUrl;
+
+    @Autowired
+    private MembersHelper memberHelper;
+    public ShjController(ObjectMapper objectMapper, TaskProcessor taskProcessor, VerifyMemberProcessor verifyMemberProcessor) {
+        this.objectMapper = objectMapper;
+        this.taskProcessor = taskProcessor;
+        this.verifyMemberProcessor = verifyMemberProcessor;
+    }
+
+    @PostMapping(value = "/shjprocess", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> processShjFile(@RequestParam("file") MultipartFile file ) {
+        String transactionId = UUID.randomUUID().toString();
+
+        // Here read the file payload and transform it to json
+        // Assuming the file is a JSON file
+
+        HttpHeaders headers = memberHelper.buildHttpHeader();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        try {
+            String payload = new String(file.getBytes());
+
+            ShjRequest request = objectMapper.readValue(payload, ShjRequest.class);
+
+            PayloadTransformer payloadTransformer = new PayloadTransformer();
+            OdmService odmService = new OdmService();
+
+            Map<String,Object> transformedPayload = payloadTransformer.transformPayload(request, transactionId);
+
+            HttpHeaders odmheaders = new HttpHeaders();
+            odmheaders.setContentType(MediaType.APPLICATION_JSON);
+
+
+            String requestJson = objectMapper.writeValueAsString(transformedPayload);
+           // logger.info("Request JSON: {}", requestJson);
+
+
+            ResponseEntity<OdmResponse> odmResponse
+                    = odmService.callOdmService(apiUrl, requestJson, transactionId, odmheaders);
+            // call ODM Service
+            // Assuming the file contains JSON data
+
+            if(odmResponse.getBody()!= null) {
+                String responseBody = String.valueOf(odmResponse.getBody());
+            }
+
+
+            String caseAction = request.getShj().get(0).getShjMember().getShjCase().getCaseAction();
+            // Here call the task processor on condition if the case action is update &&below statment
+            //if ->odmResponse.getBody().getOpportunityResponseDetails().getShjOpportunityDetails().getCreateTask().booleanValue() == true;
+            // then call taskProcessor.process
+            // same with other cases also like new and getCaseCreation is true call verifyMemberProcessor.process
+            // if response of verifyMemberProcessor is 200 and Totalcount is > 0 then call caseProcessor.process.
+            //if response of verifyMemberProcessor is 200 and Totalcount is 0 then call New Service call Foundational model
+
+            if("update".equalsIgnoreCase(caseAction)) {
+                return taskProcessor.process(payload, transactionId, headers);
+            } else if ("new".equalsIgnoreCase(caseAction)) {
+                return verifyMemberProcessor.process(payload, transactionId, headers);
+            }
+            throw new ValidationException("Invalid case action: " + caseAction);
+        } catch (IOException e) {
+            throw new ValidationException("Invalid File Content: " + e.getMessage());
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+}
