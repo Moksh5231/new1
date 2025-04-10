@@ -1,0 +1,44 @@
+package com.aetna.clinical.controller;
+
+import com.aetna.clinical.constant.TaskConstants;
+import com.aetna.clinical.pojo.taskrequest.ShjRequest;
+import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+public class ShjValidator {
+
+    private static final Logger logger = LoggerFactory.getLogger(ShjValidator.class);
+
+    public boolean validateMandatoryFields(ShjRequest.Shj shj, String shjTxnId, String ceeTransactionId) {
+        logger.error("{} : validateMandatoryFields start for shjTxnId {} ceeTransactionId {}", TaskConstants.SHJ_Validating_Mandatory, shjTxnId, ceeTransactionId);
+        boolean isValidationError = false;
+
+        if (shj.getShjMember() == null || shj.getShjMember().getMemberIdentifier() == null || StringUtils.isBlank(shj.getShjMember().getMemberIdentifier().getProxyId())) {
+            logger.error("{} : proxyId cannot be null for shjTxnId {} ceeTransactionId {}", TaskConstants.SHJ_Validating_Mandatory, shjTxnId, ceeTransactionId);
+            isValidationError = true;
+        } else if (shj.getShjMember().getShjCase() == null) {
+            logger.error("{} : shjCase object cannot be null for shjTxnId {} ceeTransactionId {}", TaskConstants.SHJ_Validating_Mandatory, shjTxnId, ceeTransactionId);
+            isValidationError = true;
+        } else if (shj.getShjMember().getShjCase().getShjTask() == null) {
+            logger.error("{} : shjTxn Object cannot be null for shjTxnId {} ceeTransactionId {}", TaskConstants.SHJ_Validating_Mandatory, shjTxnId, ceeTransactionId);
+            isValidationError = true;
+        } else if (shj.getShjMember().getShjCase().getShjTask().getCareManagementStaffer() == null) {
+            logger.error("{} : CareManagementStaffer Object cannot be null for shjTxnId {} ceeTransactionId {}", TaskConstants.SHJ_Validating_Mandatory, shjTxnId, ceeTransactionId);
+            isValidationError = true;
+        } else if (StringUtils.isBlank(shj.getShjMember().getShjCase().getShjTask().getCareManagementStaffer().getAssignedUserId())) {
+            logger.error("{} : AssignedUserId cannot be null for shjTxnId {} ceeTransactionId {}", TaskConstants.SHJ_Validating_Mandatory, shjTxnId, ceeTransactionId);
+            isValidationError = true;
+        } else if (StringUtils.isBlank(shj.getShjMember().getShjCase().getShjTask().getSubject())) {
+            logger.error("{} : Subject cannot be null for shjTxnId {} ceeTransactionId {}", TaskConstants.SHJ_Validating_Mandatory, shjTxnId, ceeTransactionId);
+            isValidationError = true;
+        } else if (StringUtils.isBlank(shj.getShjMember().getShjCase().getShjTask().getTaskRecordType())) {
+            logger.error("{} : TaskRecordType cannot be null for shjTxnId {} ceeTransactionId {}", TaskConstants.SHJ_Validating_Mandatory, shjTxnId, ceeTransactionId);
+            isValidationError = true;
+        } else {
+            logger.error("{} : mandatory field validation success for shjTxnId {} ceeTransactionId {}", TaskConstants.SHJ_Validating_Mandatory, shjTxnId, ceeTransactionId);
+        }
+
+        return isValidationError;
+    }
+}
