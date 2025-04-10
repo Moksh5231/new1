@@ -1,0 +1,60 @@
+package com.aetna.clinical.controller;
+
+import com.aetna.clinical.constant.VerifyMemberConstants;
+
+import com.aetna.clinical.pojo.taskrequest.ShjRequest;
+import com.aetna.clinical.pojo.verifymember.ReqForVerifyMember;
+import com.aetna.clinical.pojo.verifymember.ShjCompositeReqForVerifyMember;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+
+import java.util.*;
+
+public class ShjFileProcessForVerifyMember {
+
+    @Autowired
+    ObjectMapper objectMapper;
+
+    private static final Logger logger = LoggerFactory.getLogger(ShjFileProcessForVerifyMember.class);
+
+    public ShjCompositeReqForVerifyMember payloadprocessForVerifyMember(String filePayload, String transactionId, ShjRequest shjRequest) throws Exception {
+        logger.info(" inside the payload process method with transaction id :{}", transactionId);
+
+        return shjRequest.getShj().stream()
+                .filter(shj -> Optional.ofNullable(shj)
+                        .map(ShjRequest.Shj::getShjMember)
+                        .map(member -> member.getMemberIdentifier() != null && "new".equalsIgnoreCase(member.getShjCase().getCaseAction()))
+                        .orElse(false))
+                .findFirst()
+                .map(shj -> createCompositeRequestForVerifyMember(shj, transactionId))
+                .orElse(null);
+    }
+
+    private ShjCompositeReqForVerifyMember createCompositeRequestForVerifyMember(ShjRequest.Shj shj, String transactionId) {
+        ShjCompositeReqForVerifyMember shjCompositeReqForVerifyMember = new ShjCompositeReqForVerifyMember();
+        List<ReqForVerifyMember> reqForVerifyMemberList = new ArrayList<>();
+
+        reqForVerifyMemberList.add(createReqForVerifyMember(
+                VerifyMemberConstants.GET_METHOD,
+                VerifyMemberConstants.MEMBER_PLAN_URL.replace(VerifyMemberConstants.External_ID__c, shj.getShjMember().getMemberIdentifier().getMembershipId().replace("+", "%2B")),
+                VerifyMemberConstants.REFRESH_MEMBER_PLAN
+        ));
+
+        shjCompositeReqForVerifyMember.setCompositeRequest(reqForVerifyMemberList);
+        logger.info("Composite Request: {}", shjCompositeReqForVerifyMember);
+
+        return shjCompositeReqForVerifyMember;
+    }
+
+    private ReqForVerifyMember createReqForVerifyMember(String method, String url, String referenceId) {
+        ReqForVerifyMember reqForVerifyMember = new ReqForVerifyMember();
+        reqForVerifyMember.setMethod(method);
+        reqForVerifyMember.setUrl(url);
+        reqForVerifyMember.setReferenceId(referenceId);
+        logger.info("Request: Method={}, URL={}, ReferenceId={}", method, url, referenceId);
+        return reqForVerifyMember;
+    }
+
+}
