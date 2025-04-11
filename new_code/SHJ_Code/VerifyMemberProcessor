@@ -1,0 +1,161 @@
+package com.aetna.clinical.exceptionhandler;
+
+import com.aetna.clinical.constant.VerifyMemberConstants;
+import com.aetna.clinical.pojo.task.ShjCompositeResponseForTask;
+import com.aetna.clinical.pojo.taskrequest.ShjRequest;
+import com.aetna.clinical.pojo.verifymember.ReqForVerifyMember;
+import com.aetna.clinical.pojo.verifymember.ShjCompositeReqForVerifyMember;
+import com.aetna.clinical.pojo.verifymember.ShjCompositeResponseForVerifyMember;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.common.util.StringUtils;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.*;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+@Service
+public class VerifyMemberProcessor extends ShjRequestProcessor<ShjCompositeReqForVerifyMember, ShjCompositeResponseForVerifyMember> {
+
+    @Value("${SFHC.apic.producer_url}")
+    private String serviceUrl;
+
+    @Autowired
+    private CaseProcessor caseProcessor;
+
+    public VerifyMemberProcessor(ObjectMapper objectMapper, RestTemplate restTemplate) {
+        super(objectMapper, restTemplate);
+    }
+
+    @Override
+    protected void validateRequest(ShjRequest request, String transactionId) {
+        request.getShj().forEach(shj -> {
+            if (!"new".equalsIgnoreCase(shj.getShjMember().getShjCase().getCaseAction())) {
+                throw new ValidationException("Invalid case action for Verify Member");
+            }
+
+            ShjRequest.ShjMember member = shj.getShjMember();
+            if (member == null || member.getMemberIdentifier() == null) {
+                throw new ValidationException("Member identifier is missing");
+            }
+            if(StringUtils.isBlank(member.getMemberIdentifier().getMembershipId())) {
+                throw new ValidationException("Membership ID is missing");
+            }
+            if(member.getShjCase() == null || member.getShjCase().getShjID() == null) {
+                throw new ValidationException("Shj Case is missing");
+            }
+        });
+    }
+
+
+    @Override
+    protected ShjCompositeReqForVerifyMember buildServiceRequest(ShjRequest request, String transactionId) {
+        return request.getShj().stream()
+                .findFirst()
+                .map(this::buildVerifyMemberRequest)
+                .orElseThrow(() -> new ValidationException("No valid Verify Member request found"));
+    }
+
+    private ShjCompositeReqForVerifyMember buildVerifyMemberRequest(ShjRequest.Shj shj) {
+        ShjCompositeReqForVerifyMember request = new ShjCompositeReqForVerifyMember();
+        List<ReqForVerifyMember> requests = new ArrayList<>();
+
+        requests.add(createReqForVerifyMember(
+                VerifyMemberConstants.GET_METHOD,
+                VerifyMemberConstants.MEMBER_PLAN_URL.replace(VerifyMemberConstants.External_ID__c, shj.getShjMember().getMemberIdentifier().getMembershipId().replace("+", "%2B")),
+                VerifyMemberConstants.REFRESH_MEMBER_PLAN
+        ));
+
+        request.setCompositeRequest(requests);
+        return request;
+    }
+
+    private ReqForVerifyMember createReqForVerifyMember(String getMethod, String url, String refreshMemberPlan) {
+        ReqForVerifyMember reqForVerifyMember = new ReqForVerifyMember();
+        reqForVerifyMember.setMethod(getMethod);
+        reqForVerifyMember.setUrl(url);
+        reqForVerifyMember.setReferenceId(refreshMemberPlan);
+        logger.info("Request: Method={}, URL={}, ReferenceId={}", getMethod, url, refreshMemberPlan);
+        return reqForVerifyMember;
+    }
+
+    @Override
+    protected ResponseEntity<?> executeServiceCall(ShjCompositeReqForVerifyMember request, HttpHeaders headers, String transactionId) {
+        try {
+           // String requestBody = objectMapper.writeValueAsString(request);
+
+            HttpEntity<ShjCompositeReqForVerifyMember> entity = new HttpEntity<>(request, headers);
+            ResponseEntity<ShjCompositeResponseForVerifyMember> response =
+                    restTemplate.exchange(serviceUrl, HttpMethod.POST, entity, ShjCompositeResponseForVerifyMember.class);
+
+            return processVerifyResponse(response,headers, transactionId);
+        } catch (Exception e) {
+            throw new ServiceException("Verify Member service call failed : " + e.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    private ResponseEntity<?> processVerifyResponse(ResponseEntity<ShjCompositeResponseForVerifyMember> response,
+                                                    HttpHeaders headers, String transactionId) {
+        if (response.getBody() == null) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Response body is null from SHJ Service");
+        }
+
+        Map<String, Object> responseMapOk = new HashMap<>();
+        Map<String, Object> responseMapError = new HashMap<>();
+        boolean hasError = false;
+
+        if (response.getBody().getCompositeResponse() != null) {
+            for (ShjCompositeResponseForVerifyMember.CompositeResponse compositeResponse :
+                    response.getBody().getCompositeResponse()) {
+
+                if (compositeResponse.getBody() != null &&
+                        compositeResponse.getBody().getErrors() != null &&
+                        !compositeResponse.getBody().getErrors().isEmpty()) {
+                    // Handle error response
+                    responseMapError.put(compositeResponse.getReferenceId() + "_error",
+                            compositeResponse.getBody().getErrors());
+                    responseMapError.put("httpStatusCode", compositeResponse.getHttpStatusCode());
+                    responseMapError.put("transactionId", transactionId);
+                    hasError = true;
+                } else if (compositeResponse.getBody() != null) {
+                    // Handle success response
+                    ShjCompositeResponseForVerifyMember.Body body = compositeResponse.getBody();
+                    if (body.getRecords() != null && !body.getRecords().isEmpty()
+                            && body.getTotalSize() > 0) {
+                        responseMapOk.put(compositeResponse.getReferenceId() + "_Verify_Member_Service_",
+                                body.getRecords().get(0).getId());
+
+                    } else if(compositeResponse.getHttpStatusCode() == 200
+                            && body.getTotalSize() == 0) {
+                        responseMapOk.put(compositeResponse.getReferenceId() + "_Verify_Member_Service_",
+                                "No records found");
+                        //CaseProcessor caseProcessor = new CaseProcessor(objectMapper, restTemplate);
+
+                    }
+                }
+                if (hasError) {
+                    logger.error("Error in SHJ Service response: {}", compositeResponse.getBody().getErrors());
+                    return ResponseEntity.badRequest().body(responseMapError);
+                }
+            }
+            return ResponseEntity.ok(responseMapOk);
+        } else {
+            logger.error("No composite response found in SHJ Service response");
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("No composite response found in SHJ Service response");
+        }
+    }
+
+    private String encodeId(String id) {
+
+        return id.replace("+", "%2B");
+    }
+
+
+}
