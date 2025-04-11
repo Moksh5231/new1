@@ -1,0 +1,248 @@
+package com.aetna.clinical.exceptionhandler;
+
+import com.aetna.clinical.constant.TaskConstants;
+import com.aetna.clinical.pojo.task.ReqForTask;
+import com.aetna.clinical.pojo.task.ShjCompositeReqForTask;
+import com.aetna.clinical.pojo.task.ShjCompositeResponseForTask;
+import com.aetna.clinical.pojo.taskrequest.ShjRequest;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.common.util.StringUtils;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.*;
+import org.springframework.stereotype.Service;
+import org.springframework.web.ErrorResponse;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Stream;
+
+@Service
+public class TaskProcessor extends ShjRequestProcessor<ShjCompositeReqForTask, ShjCompositeResponseForTask> {
+
+    @Value("${SFHC.apic.producer_url}")
+    private String serviceUrl;
+    
+    public TaskProcessor(ObjectMapper objectMapper, RestTemplate restTemplate) {
+        super(objectMapper, restTemplate);
+       
+    }
+
+    @Override
+    protected void validateRequest(ShjRequest request, String transactionId) {
+        request.getShj().forEach(shj -> {
+            if (!"update".equalsIgnoreCase(shj.getShjMember().getShjCase().getCaseAction())) {
+                throw new ValidationException("Invalid case action for task Update");
+            }
+
+            ShjRequest.ShjMember member = shj.getShjMember();
+            if (member == null || member.getMemberIdentifier() == null) {
+                throw new ValidationException("Member identifier is missing");
+            }
+            if(StringUtils.isBlank(member.getMemberIdentifier().getMembershipId())) {
+                throw new ValidationException("Membership ID is missing");
+            }
+            if(member.getShjCase() == null || member.getShjCase().getShjID() == null) {
+                throw new ValidationException("Shj Case is missing");
+            }
+            if(member.getShjCase().getShjTask() == null || member.getShjCase().getShjTask().getCareManagementStaffer() == null) {
+                throw new ValidationException("Shj Task information is missing");
+            }
+        });
+    }
+    
+    @Override
+    protected ShjCompositeReqForTask buildServiceRequest(ShjRequest request, String transactionId) {
+        return request.getShj().stream()
+                .findFirst()
+                .map(this::buildTaskRequest)
+                .orElseThrow(() -> new ValidationException("No valid task request found"));
+    }
+    
+    private ShjCompositeReqForTask buildTaskRequest(ShjRequest.Shj shj) {
+        ShjCompositeReqForTask taskRequest = new ShjCompositeReqForTask();
+        List<ReqForTask> requests = new ArrayList<>();
+        
+        requests.add(buildMemberPlanRequest(shj));
+        requests.add(buildRecTypeRequest(shj));
+        requests.add(buildAccountRequest(shj));
+        requests.add(buildUserRequest(shj));
+        requests.add(buildTaskUpdateRequest(shj));
+        
+        taskRequest.setCompositeRequest(requests);
+        return taskRequest;
+    }
+
+    private ReqForTask buildRecTypeRequest(ShjRequest.Shj shj) {
+        return createReqForTask(
+                TaskConstants.GET_METHOD,
+                TaskConstants.Record_TYPE_Url,
+                TaskConstants.Reference_REC_TYPE_ID);
+    }
+
+    private ReqForTask buildTaskUpdateRequest(ShjRequest.Shj shj) {
+        ReqForTask task = createReqForTask(
+                TaskConstants.PATCH_METHOD,
+                TaskConstants.Task_Url.replace(TaskConstants.External_ID_SHJ__c,
+                        shj.getShjMember().getShjCase().getShjID().replace("-", "%2B")),
+                TaskConstants.Reference_TASK);
+
+        Map<String, Object> body = new HashMap<>();
+        body.put(TaskConstants.WHO_ID, TaskConstants.WHO_ID_VALUE);
+        body.put(TaskConstants.OWNER_ID, TaskConstants.OWNER_ID_VALUE);
+        body.put(TaskConstants.RECORD_TYPE_ID, TaskConstants.RECORD_TYPE_ID_VALUE);
+        body.put(TaskConstants.WHAT_ID, TaskConstants.WHAT_ID_VALUE);
+        //  body.put(TaskConstants.STATUS, TaskConstants.STATUS_VALUE);
+        Stream.of(
+                        Map.entry(TaskConstants.Description, getShjTaskProperty(shj, ShjRequest.ShjTask::getComments)),
+                        Map.entry(TaskConstants.ActivityDate, getShjTaskProperty(shj, ShjRequest.ShjTask::getDueDate)),
+                        Map.entry(TaskConstants.Priority, getShjTaskProperty(shj, ShjRequest.ShjTask::getPriority)),
+                        Map.entry(TaskConstants.Subject, getShjTaskProperty(shj, ShjRequest.ShjTask::getSubject)),
+                        Map.entry(TaskConstants.STATUS, getShjTaskProperty(shj, ShjRequest.ShjTask::getStatus))
+                ).filter(entry -> entry.getValue() != null) // Ensure the value is not null
+                .forEach(entry -> {
+                    if (entry.getValue() != null) { // Additional null check for safety
+                        body.put(entry.getKey(), entry.getValue());
+                    }else {
+                        logger.error("Filed {} and value is {} ",entry.getKey(),entry.getKey());
+                        throw new ValidationException("Field " + entry.getKey() + " cannot be null");
+                    }
+                });
+        task.setBody(body);
+
+        return task;
+    }
+
+    private <T> T getShjTaskProperty(ShjRequest.Shj shj, Function<ShjRequest.ShjTask, T> propertyExtractor) {
+        if(shj == null){
+            return null;
+        }
+        ShjRequest.ShjMember member = shj.getShjMember();
+        if (member == null) {
+            return null;
+        }
+        ShjRequest.ShjCase shjCase = member.getShjCase();
+        if (shjCase == null) {
+            return null;
+        }
+        ShjRequest.ShjTask shjTask = shjCase.getShjTask();
+        if (shjTask == null) {
+            return null;
+        }
+        return propertyExtractor.apply(shjTask);
+    }
+
+    private ReqForTask buildUserRequest(ShjRequest.Shj shj) {
+        ShjRequest.ShjTask shjTask = shj.getShjMember().getShjCase().getShjTask();
+        if (shjTask != null && shjTask.getCareManagementStaffer() != null && shjTask.getCareManagementStaffer().getAssignedUserId() != null) {
+            return createReqForTask(
+                    TaskConstants.GET_METHOD,
+                    TaskConstants.User_Url.replace(TaskConstants.FEDERAL_IDENTIFIER,
+                            shjTask.getCareManagementStaffer().getAssignedUserId()),
+                    TaskConstants.Reference_USER_ID);
+        } else {
+            logger.error("ShjTask or CareManagementStaffer is null for transaction ID: {}", shj.getShjMember().getShjCase().getShjID());
+            throw new ValidationException("UserId is null");
+        }
+    }
+
+    private ReqForTask buildAccountRequest(ShjRequest.Shj shj) {
+        return createReqForTask(
+                TaskConstants.GET_METHOD,
+                TaskConstants.Account_Url.replace(TaskConstants.Account_External_ID__c,
+                        shj.getShjMember().getMemberIdentifier().getProxyId()),
+                TaskConstants.Reference_ACCOUNT_ID);
+    }
+
+    private ReqForTask buildMemberPlanRequest(ShjRequest.Shj shj) {
+
+        return createReqForTask(
+                TaskConstants.GET_METHOD,
+                TaskConstants.Member_Plan_url_For_TASK.replace(TaskConstants.CMM_External_Id__c,
+                        shj.getShjMember().getMemberIdentifier().getMembershipId().replace("+","%2B")),
+                TaskConstants.Reference_MEMBER_PLAN_ID);
+
+    }
+
+    private ReqForTask createReqForTask(String method, String url, String referenceId) {
+        ReqForTask reqForTask = new ReqForTask();
+        reqForTask.setMethod(method);
+        reqForTask.setUrl(url);
+        reqForTask.setReferenceId(referenceId);
+        logger.info("Request: Method={}, URL={}, ReferenceId={}", method, url, referenceId);
+        return reqForTask;
+    }
+
+    private String encodeId(String membershipId) {
+        return membershipId.replace("+", "%2B");
+    }
+
+    @Override
+    protected ResponseEntity<?> executeServiceCall(ShjCompositeReqForTask request, HttpHeaders headers, String transactionId) {
+        try {
+            //  String requestBody = objectMapper.writeValueAsString(request);
+
+            HttpEntity<ShjCompositeReqForTask> entity = new HttpEntity<>(request, headers);
+
+            ResponseEntity<ShjCompositeResponseForTask> response =
+                    restTemplate.exchange(serviceUrl, HttpMethod.POST, entity, ShjCompositeResponseForTask.class);
+
+            return processTaskResponse(response, transactionId);
+        } catch (HttpClientErrorException e) {
+            throw new ServiceException("Task Service error" + e.getResponseBodyAsString(), HttpStatus.INTERNAL_SERVER_ERROR);
+        } catch (Exception e) {
+            throw new ServiceException("Error executing Task service call: " + e.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
+    private ResponseEntity<?> processTaskResponse(ResponseEntity<ShjCompositeResponseForTask> response, String transactionId) {
+        if (response.getBody() == null) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Response body is null from SHJ Service");
+        }
+
+        Map<String, Object> responseMapOk = new HashMap<>();
+        Map<String, Object> responseMapError = new HashMap<>();
+        boolean hasError = false;
+
+        if(response.getBody().getCompositeResponse() != null) {
+            for (ShjCompositeResponseForTask.CompositeResponse compositeResponse :
+                    response.getBody().getCompositeResponse()) {
+
+                if (compositeResponse.hasErrors()) {
+                    // Handle error response
+                    responseMapError.put(compositeResponse.getReferenceId() + "_error",
+                            compositeResponse.getErrors());
+                    responseMapError.put("httpStatusCode", compositeResponse.getHttpStatusCode());
+                    responseMapError.put("transactionId", transactionId);
+                    hasError = true;
+                } else if (compositeResponse.getBody() != null) {
+                    // Handle success response
+                    ShjCompositeResponseForTask.Body body = compositeResponse.getBody();
+                    if (TaskConstants.Reference_TASK.equalsIgnoreCase(compositeResponse.getReferenceId())) {
+                        responseMapOk.put(compositeResponse.getReferenceId(), body.getId());
+                    } else if (body.getRecords() != null && !body.getRecords().isEmpty()) {
+                        responseMapOk.put(compositeResponse.getReferenceId(),
+                                body.getRecords().get(0).getId());
+                    }
+                }
+                if (hasError) {
+                    logger.error("Error in SHJ Service response: {}", compositeResponse.getErrors());
+                    return ResponseEntity.badRequest().body(responseMapError);
+                }
+            }
+            return ResponseEntity.ok(responseMapOk);
+        }else {
+            logger.error("No composite response found in SHJ Service response");
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("No composite response found in SHJ Service response");
+        }
+    }
+
+
+
+}
+
