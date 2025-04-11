@@ -85,24 +85,52 @@ public class ShjController {
             String cmmId = request.getShj().get(0).getShjMember().getMemberIdentifier().getMembershipId();
             String proxyId = request.getShj().get(0).getShjMember().getMemberIdentifier().getProxyId();
 
-           /* if ("update".equalsIgnoreCase(caseAction) && shouldCreateTask) {
+           if ("update".equalsIgnoreCase(caseAction) && shouldCreateTask) {
                 return taskProcessor.process(payload, transactionId, headers);
             } else if ("new".equalsIgnoreCase(caseAction) && shouldCreateCase) {
-                ResponseEntity<?> verifyResponse = verifyMemberProcessor.process(payload, transactionId, headers);
-            }
-*/
-            if("new".equalsIgnoreCase(caseAction)){
-                // call test Foundation model
-                return foundationModelService.runService(cmmId, proxyId, foundationModelUrl, transactionId);
-            }
+               ResponseEntity<?> verifyResponse = verifyMemberProcessor.process(payload, transactionId, headers);
+               if (verifyResponse.getStatusCode().is2xxSuccessful()) {
+                   Map<String, Object> verifyResponseBody = (Map<String, Object>) verifyResponse.getBody();
+                   verifyResponseBody.put("transactionId",transactionId);
+                   int totalCount = (int) verifyResponseBody.get("totalCount");
+                   if (totalCount > 0) {
+                       ResponseEntity<?> caseResponse = caseProcessor.process(payload, transactionId, headers);
+                     // here add the caseResponse to the verifyResponse
+                       verifyResponseBody.put("caseResponse", caseResponse.getBody());
+                       verifyResponseBody.put("status", caseResponse.getStatusCode());
+                       verifyResponseBody.remove("totalCount");
+                       return ResponseEntity.ok(verifyResponseBody);
+                   } else {
+                       ResponseEntity<?> fonResponse= foundationModelService.runService(cmmId, proxyId, foundationModelUrl, transactionId);
+                       if (fonResponse.getStatusCode().is2xxSuccessful()) {
+                            Map<String, Object> fonResponseBody = (Map<String, Object>) fonResponse.getBody();
+                            verifyResponseBody.putAll(fonResponseBody);
+                            ResponseEntity<?> caseResponse = caseProcessor.process(payload, transactionId, headers);
 
+                          } else {
+                            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                                      .body("Foundation Model Service call failed");
+                       }
+                   }
+                   verifyResponseBody.remove("totalCount");
+                   verifyResponse.getBody();
+                   return verifyResponse;
+               }
 
-            return ResponseEntity.status(HttpStatus.OK)
-                    .body("Processing completed successfully");
+           }else{
+               return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                       .body("Invalid case action or task creation flag");
+           }
+
         } catch (IOException e) {
-            throw new ValidationException("Invalid File Content: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Error reading file: " + e.getMessage());
+        } catch (ServiceException e) {
+            return ResponseEntity.status(e.getStatus())
+                    .body("Service error: " + e.getMessage());
         } catch (Exception e) {
             throw new RuntimeException("Processing failed: " + e.getMessage(), e);
         }
+        return ResponseEntity.ok("Processing completed successfully");
     }
 }
