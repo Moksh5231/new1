@@ -1,0 +1,180 @@
+File-Input
+===========
+{
+  "shj": [
+    {
+      "specVersion": "1.0",
+      "shjMember": {
+        "memberIdentifier": {
+          "membershipId": "59~101576374401+Z00000000003017+2025-01-01",
+          "proxyId": "15~R8WJBQBBBPXZ"
+        },
+        "programName": "Community Care",
+        "shjCase": {
+          "shjID": "65ff22d7-f00e-4259-81d1-f6fb3be809f6",
+          "shjTxnID": "a1ec2c28-2c7a-4f8a-b883-0729d2f14e4e",
+          "caseAction": "New",
+          "caseReason": "IFP Complex",
+          "shjTask": {
+            "careManagementStaffer": {
+              "assignedUserId": "A123457"
+            }
+          },
+          "personalizedContent": {
+            "identityType": "Hi"
+          },
+          "shjOpptyCreationDt": "2025-02-04T00:00:00Z",
+          "shjOpptyUpdatedDt": "2025-02-04T00:00:00Z",
+          "shjEventTransactionDt": "2025-02-04T15:36:05.297642200Z"
+        }
+      },
+      "deliveryChannel": "CEC"
+    }
+  ]
+}
+
+
+--------------------
+
+
+{
+  "compositeRequest": [
+    {
+      "method": "GET",
+      "url": "/services/data/v62.0/query/?q=select Id FROM MemberPlan WHERE CMM_External_Id__c = '5~180017750%2B10%2B2%2B20050401%2B742188%2BW%2B77' LIMIT 1 ",
+      "referenceId": "refMemberPlanId",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "url": "/services/data/v62.0/query/?q=select Id FROM Account WHERE External_ID__c ='15~HTRBABCD' LIMIT 1",
+      "referenceId": "refAccountId",
+      "body": null
+    },
+    {
+      "method": "PATCH",
+      "url": "/services/data/v62.0/sobjects/Case/External_ID_SHJ__c/fa9fb976-7a55-4149-86ac-2bda70df2e0d",
+      "referenceId": "refCaseId",
+      "body": {
+        "Origin": "SHJ",
+        "Status": "Identified",
+        "Type": "Opportunity",
+        "AccountId": "@{refAccountId.records[0].Id}",
+        "RecordType": {
+          "Name": "OneCM Case Smart Health Journey"
+        },
+        "Priority": "High",
+        "Member_Plan__c": "@{refMemberPlanId.records[0].Id}",
+        "Reason": "IFP Complex"
+      }
+    },
+    {
+      "method": "PATCH",
+      "url": "/services/data/v62.0/sobjects/ClinicalServiceRequest/External_ID_SHJ__c/fa9fb976-7a55-4149-86ac-2bda70df2e0d",
+      "referenceId": "ClinicalServiceRequestId",
+      "body": {
+        "Status": "Identified",
+        "Type": "Opportunity",
+        "RecordType": {
+          "Name": "OneCM Service Request Smart Health Journey"
+        },
+        "Priority": "High",
+        "PatientId": "@{refAccountId.records[0].Id}",
+        "Case__c": "@{refCaseId.id}",
+        "SourceSystem": "SHJ"
+      }
+    },
+    {
+      "method": "POST",
+      "url": "/services/data/v62.0/sobjects/ClinicalServiceRequestDetail",
+      "referenceId": "refCSRDetails",
+      "body": {
+        "ClinicalServiceRequestId": "@{ClinicalServiceRequestId.id}"
+      }
+    }
+  ]
+}
+
+----------
+
+Response:
+=========
+
+{
+  "compositeResponse": [
+    {
+      "body": {
+        "totalSize": 1,
+        "done": true,
+        "records": [
+          {
+            "attributes": {
+              "type": "MemberPlan",
+              "url": "/services/data/v62.0/sobjects/MemberPlan/0SqWe0000001HwTKAU"
+            },
+            "Id": "0SqWe0000001HwTKAU"
+          }
+        ]
+      },
+      "httpHeaders": {},
+      "httpStatusCode": 200,
+      "referenceId": "refMemberPlanId"
+    },
+    {
+      "body": {
+        "totalSize": 1,
+        "done": true,
+        "records": [
+          {
+            "attributes": {
+              "type": "Account",
+              "url": "/services/data/v62.0/sobjects/Account/001We00000BH22JIAT"
+            },
+            "Id": "001We00000BH22JIAT"
+          }
+        ]
+      },
+      "httpHeaders": {},
+      "httpStatusCode": 200,
+      "referenceId": "refAccountId"
+    },
+    {
+      "body": {
+        "id": "500We000008TITGIA4",
+        "success": true,
+        "errors": [],
+        "created": false
+      },
+      "httpHeaders": {
+        "Location": "/services/data/v62.0/sobjects/Case/500We000008TITGIA4"
+      },
+      "httpStatusCode": 200,
+      "referenceId": "refCaseId"
+    },
+    {
+      "body": {
+        "id": "0jyWe0000000AVdIAM",
+        "success": true,
+        "errors": [],
+        "created": false
+      },
+      "httpHeaders": {
+        "Location": "/services/data/v62.0/sobjects/ClinicalServiceRequest/0jyWe0000000AVdIAM"
+      },
+      "httpStatusCode": 200,
+      "referenceId": "ClinicalServiceRequestId"
+    },
+    {
+      "body": [
+        {
+          "message": "entity type cannot be inserted: Clinical Service Request Detail",
+          "errorCode": "CANNOT_INSERT_UPDATE_ACTIVATE_ENTITY",
+          "fields": []
+        }
+      ],
+      "httpHeaders": {},
+      "httpStatusCode": 400,
+      "referenceId": "refCSRDetails"
+    }
+  ]
+}
