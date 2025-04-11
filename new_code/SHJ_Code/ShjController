@@ -1,0 +1,108 @@
+package com.aetna.clinical.exceptionhandler;
+
+import com.aetna.clinical.common.util.MembersHelper;
+import com.aetna.clinical.exceptionhandler.*;
+import com.aetna.clinical.pojo.taskrequest.ShjRequest;
+import com.aetna.clinical.pojo.verifymember.ShjCompositeResponseForVerifyMember;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.IOException;
+import java.util.Map;
+import java.util.UUID;
+
+@RestController
+public class ShjController {
+    private final ObjectMapper objectMapper;
+    private final TaskProcessor taskProcessor;
+    private final VerifyMemberProcessor verifyMemberProcessor;
+    private final CaseProcessor caseProcessor;
+    private final OdmService odmService;
+    private final PayloadTransformer payloadTransformer;
+    private final MembersHelper memberHelper;
+    private final FoundationModelService foundationModelService;
+
+    @Value("${ODM.apic.url}")
+    private String apiUrl;
+
+    @Value("${FMS.apic.url}")
+    private String foundationModelUrl;
+
+    public ShjController(ObjectMapper objectMapper,
+                         TaskProcessor taskProcessor, VerifyMemberProcessor verifyMemberProcessor,
+                         CaseProcessor caseProcessor, OdmService odmService,
+                         PayloadTransformer payloadTransformer, MembersHelper memberHelper,
+                         FoundationModelService foundationModelService) {
+        this.objectMapper = objectMapper;
+        this.taskProcessor = taskProcessor;
+        this.verifyMemberProcessor = verifyMemberProcessor;
+        this.caseProcessor = caseProcessor;
+        this.odmService = odmService;
+        this.payloadTransformer = payloadTransformer;
+        this.memberHelper = memberHelper;
+        this.foundationModelService = foundationModelService;
+    }
+
+    @PostMapping(value = "/shjprocess", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> processShjFile(@RequestParam("file") MultipartFile file) {
+        String transactionId = UUID.randomUUID().toString();
+        HttpHeaders headers = memberHelper.buildHttpHeader();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        try {
+            String payload = new String(file.getBytes());
+            ShjRequest request = objectMapper.readValue(file.getBytes(), ShjRequest.class);
+            Map<String, Object> transformedPayload = payloadTransformer.transformPayload(request, transactionId);
+
+            ResponseEntity<OdmResponse> odmResponse = odmService.callOdmService(
+                    apiUrl,
+                    objectMapper.writeValueAsString(transformedPayload),
+                    transactionId,
+                    headers
+            );
+
+            if (odmResponse.getBody() == null) {
+                throw new ServiceException("ODM response is empty", HttpStatus.INTERNAL_SERVER_ERROR);
+            }
+
+            String caseAction = request.getShj().get(0).getShjMember().getShjCase().getCaseAction();
+            boolean shouldCreateTask = odmResponse.getBody().getOpportunityResponseDetails()
+                    .getShjOpportunityDetails()
+                    .getCreateTask();
+
+            boolean shouldCreateCase = odmResponse.getBody().getOpportunityResponseDetails()
+                    .getShjOpportunityDetails()
+                    .getCreateCase();
+
+            String cmmId = request.getShj().get(0).getShjMember().getMemberIdentifier().getMembershipId();
+            String proxyId = request.getShj().get(0).getShjMember().getMemberIdentifier().getProxyId();
+
+           /* if ("update".equalsIgnoreCase(caseAction) && shouldCreateTask) {
+                return taskProcessor.process(payload, transactionId, headers);
+            } else if ("new".equalsIgnoreCase(caseAction) && shouldCreateCase) {
+                ResponseEntity<?> verifyResponse = verifyMemberProcessor.process(payload, transactionId, headers);
+            }
+*/
+            if("new".equalsIgnoreCase(caseAction)){
+                // call test Foundation model
+                return foundationModelService.runService(cmmId, proxyId, foundationModelUrl, transactionId);
+            }
+
+
+            return ResponseEntity.status(HttpStatus.OK)
+                    .body("Processing completed successfully");
+        } catch (IOException e) {
+            throw new ValidationException("Invalid File Content: " + e.getMessage());
+        } catch (Exception e) {
+            throw new RuntimeException("Processing failed: " + e.getMessage(), e);
+        }
+    }
+}
