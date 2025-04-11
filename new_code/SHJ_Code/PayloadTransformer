@@ -1,0 +1,118 @@
+package com.aetna.clinical.exceptionhandler;
+
+import com.aetna.clinical.pojo.taskrequest.ShjRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@Component
+public class PayloadTransformer {
+    private static final Logger logger = LoggerFactory.getLogger(PayloadTransformer.class);
+
+    public Map<String, Object> transformPayload(ShjRequest shjRequest, String transactionId) {
+        logger.info("Transforming SHJ payload for transaction: {}", transactionId);
+
+        Map<String, Object> transformedPayload = new HashMap<>();
+
+        // Add the decision ID
+        transformedPayload.put("__DecisionID__", "SampleDecision");
+
+        // Create the opportunity request map
+        Map<String, Object> opportunityRequest = new HashMap<>();
+
+        // Add transaction ID
+        opportunityRequest.put("transactionId", transactionId);
+
+        // Get the first SHJ item (assuming single item as per sample)
+        if (shjRequest.getShj() != null && !shjRequest.getShj().isEmpty()) {
+            ShjRequest.Shj shj = shjRequest.getShj().get(0);
+
+            // Move all SHJ fields directly under opportunityRequest
+            opportunityRequest.put("specVersion", shj.getSpecVersion());
+            opportunityRequest.put("deliveryChannel", shj.getDeliveryChannel());
+
+            // Transform member data
+            opportunityRequest.put("shjMember", transformShjMember(shj.getShjMember()));
+        }
+
+        // Add the wrapper to the transformed payload
+        transformedPayload.put("ONECMSHJOpportunityRequest", opportunityRequest);
+
+        return transformedPayload;
+    }
+
+    private Map<String, Object> transformShjMember(ShjRequest.ShjMember shjMember) {
+        Map<String, Object> memberMap = new HashMap<>();
+
+        // Member identifier
+        Map<String, Object> memberIdentifier = new HashMap<>();
+        memberIdentifier.put("membershipId", shjMember.getMemberIdentifier().getMembershipId());
+        memberIdentifier.put("proxyId", shjMember.getMemberIdentifier().getProxyId());
+        memberMap.put("memberIdentifier", memberIdentifier);
+
+        memberMap.put("programName", shjMember.getProgramName());
+
+        // Transform case data
+        memberMap.put("shjCase", transformShjCase(shjMember.getShjCase()));
+
+        return memberMap;
+    }
+
+    private Map<String, Object> transformShjCase(ShjRequest.ShjCase shjCase) {
+        Map<String, Object> caseMap = new HashMap<>();
+
+        caseMap.put("shjID", shjCase.getShjID());
+        caseMap.put("shjTxnID", shjCase.getShjTxnID());
+        caseMap.put("caseAction", shjCase.getCaseAction());
+        caseMap.put("caseReason", shjCase.getCaseReason());
+
+        // Transform task data
+        if (shjCase.getShjTask() != null) {
+            caseMap.put("shjTask", transformShjTask(shjCase.getShjTask()));
+        }
+
+        // Add additional fields if they exist
+        if (shjCase.getPersonalizedContent() != null) {
+            caseMap.put("personalizedContent", shjCase.getPersonalizedContent());
+        }
+        if (shjCase.getShjOpptyCreationDt() != null) {
+            caseMap.put("shjOpptyCreationDt", shjCase.getShjOpptyCreationDt());
+        }
+        if (shjCase.getShjOpptyUpdatedDt() != null) {
+            caseMap.put("shjOpptyUpdatedDt", shjCase.getShjOpptyUpdatedDt());
+        }
+        if (shjCase.getShjEventTransactionDt() != null) {
+            caseMap.put("shjEventTransactionDt", shjCase.getShjEventTransactionDt());
+        }
+
+        return caseMap;
+    }
+
+    private Map<String, Object> transformShjTask(ShjRequest.ShjTask shjTask) {
+        Map<String, Object> taskMap = new HashMap<>();
+
+        // Care management staffer
+        Map<String, Object> stafferMap = new HashMap<>();
+        ShjRequest.CareManagementStaffer staffer = shjTask.getCareManagementStaffer();
+        stafferMap.put("assignedUserId", staffer.getAssignedUserId());
+        stafferMap.put("assignedUserIdType", staffer.getAssignedUserIdType());
+        stafferMap.put("assignedUserName", staffer.getAssignedUserName());
+        stafferMap.put("assignedUserRole", staffer.getAssignedUserRole());
+        stafferMap.put("assignedUserEmail", staffer.getAssignedUserEmail());
+        stafferMap.put("assignedUserPhone", staffer.getAssignedUserPhone());
+        taskMap.put("careManagementStaffer", stafferMap);
+
+        taskMap.put("comments", shjTask.getComments());
+        taskMap.put("dueDate", shjTask.getDueDate());
+        taskMap.put("priority", shjTask.getPriority());
+       // taskMap.put("status", shjTask.getStatus());
+        taskMap.put("subject", shjTask.getSubject());
+        taskMap.put("taskRecordType", shjTask.getTaskRecordType());
+        taskMap.put("whatId", shjTask.getWhatId());
+
+        return taskMap;
+    }
+}
