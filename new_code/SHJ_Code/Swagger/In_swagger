@@ -1,0 +1,190 @@
+poe.file
+========
+{
+  "swagger": "2.0",
+  "info": {
+    "description": "This service processes campaign requests by uploading a file along with JSON data.",
+    "version": "3.0.0",
+    "title": "File and JSON Upload Service",
+    "contact": {
+      "name": "Raymond Haseltine",
+      "email": "haseltiner@aetna.com"
+    }
+  },
+  "host": "edcs.aetna.com",
+  "basePath": "/caremanagement/cs/v1/edb",
+  "schemes": ["https"],
+  "consumes": ["multipart/form-data"],
+  "produces": ["application/json"],
+  "paths": {
+    "/shjm_task": {
+      "post": {
+        "summary": "Upload a file and JSON data for processing",
+        "operationId": "uploadFileAndJson",
+        "parameters": [
+          {
+            "in": "formData",
+            "name": "file",
+            "description": "The file to upload",
+            "required": true,
+            "type": "file"
+          },
+          {
+            "in": "formData",
+            "name": "jsonData",
+            "description": "JSON object containing campaign details",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File and JSON data accepted for processing",
+            "schema": {
+              "$ref": "#/definitions/SimpleResponse"
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid file or JSON format",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "SimpleResponse": {
+      "type": "object",
+      "properties": {
+        "transactionId": {
+          "type": "string",
+          "example": "f78yh77j-4a55-7743-89ai-2yua65df2e0d",
+          "description": "Unique ID for this transaction"
+        },
+        "status": {
+          "type": "string",
+          "example": "Received",
+          "description": "Current processing status",
+          "enum": ["Received", "Processing"]
+        }
+      }
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string",
+          "example": "Invalid file format or JSON data",
+          "description": "Description of the error"
+        },
+        "details": {
+          "type": "string",
+          "example": "File must be of type CSV and JSON structure is invalid",
+          "description": "Additional error details"
+        }
+      }
+    }
+  }
+}
+
+
+
+===============================
+
+seek
+====
+{
+  "swagger": "2.0",
+  "info": {
+    "description": "This service takes file uploads for campaign processing",
+    "version": "3.0.0",
+    "title": "File Upload Service",
+    "contact": {
+      "name": "Raymond Haseltine",
+      "email": "haseltiner@aetna.com"
+    }
+  },
+  "host": "edcs.aetna.com",
+  "basePath": "/caremanagement/cs/v1/edb",
+  "schemes": ["https"],
+  "consumes": ["multipart/form-data"],
+  "produces": ["application/json"],
+  "paths": {
+    "/shjm_task": {
+      "post": {
+        "summary": "Upload a file for processing",
+        "operationId": "uploadFile",
+        "parameters": [
+          {
+            "in": "formData",
+            "name": "file",
+            "description": "The file to upload",
+            "required": true,
+            "type": "file"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File accepted for processing",
+            "schema": {
+              "$ref": "#/definitions/SimpleResponse"
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid file or parameters",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "SimpleResponse": {
+      "type": "object",
+      "properties": {
+        "transactionId": {
+          "type": "string",
+          "example": "f78yh77j-4a55-7743-89ai-2yua65df2e0d",
+          "description": "Unique ID for this transaction"
+        },
+        "status": {
+          "type": "string",
+          "example": "Received",
+          "description": "Current processing status",
+          "enum": ["Received", "Processing"]
+        }
+      }
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string",
+          "example": "Invalid file format",
+          "description": "Description of the error"
+        },
+        "details": {
+          "type": "string",
+          "example": "File must be CSV format",
+          "description": "Additional error details"
+        }
+      }
+    }
+  }
+}
