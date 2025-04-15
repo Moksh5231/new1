@@ -1,0 +1,402 @@
+{
+  "swagger" : "2.0",
+  "info" : {
+    "description" : "This service takes the campaign request from SHJ in JSON and converts it to the file schema in pipe delimited form and sends it (via ftps) to the DataStage system for CPL campaign processing to CEC.",
+    "version" : "3.0.0",
+    "title" : "/caremanagement/cs/v1/edb/shjm_task",
+    "contact" : {
+      "name" : "Raymond Haseltine",
+      "url" : "http://",
+      "email" : "haseltiner@aetna.com"
+    },
+    "license" : {
+      "name" : ""
+    }
+  },
+  "host" : "edcs.aetna.com",
+  "basePath" : "/caremanagement/cs/v1/edb",
+  "schemes" : [ "https" ],
+  "consumes" : [ "application/json" ],
+  "produces" : [ "application/json" ],
+  "paths" : {
+    "/shjm_task" : {
+      "post" : {
+        "operationId" : "shjm_task_POST",
+        "parameters" : [ {
+          "in" : "body",
+          "name" : "SHJRequest",
+          "required" : true,
+          "schema" : {
+            "$ref" : "#/definitions/SHJMrequest"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "The OK response that the body/post is valid checks for required parameters to be present. It doesn't mean the backend systems have processed the file or that the member information has been loaded yet into CEC/SFDC",
+            "schema" : {
+              "$ref" : "#/definitions/Response"
+            }
+          },
+          "400" : {
+            "description" : "Error Response if the request doesn't contain required information.",
+            "schema" : {
+              "$ref" : "#/definitions/ErrorStatus"
+            }
+          },
+          "500" : {
+            "description" : "Error if one or more of the backend systems isn't available or responding.",
+            "schema" : {
+              "$ref" : "#/definitions/ErrorStatus"
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions" : {
+    "Response" : {
+      "type" : "object",
+      "required" : [ "shjStatus" ],
+      "properties" : {
+        "shjStatus" : {
+          "type" : "array",
+          "items" : {
+            "$ref" : "#/definitions/SHJStatus"
+          }
+        }
+      }
+    },
+    "SHJStatus" : {
+      "type" : "object",
+      "properties" : {
+        "specVersion" : {
+          "type" : "string",
+          "example" : "1.0",
+          "description" : "Version of the Status Request/Response that will be sent back to the SHJ API"
+        },
+        "shjID" : {
+          "type" : "string",
+          "example" : "fa9fb976-7a55-4149-86ac-2bda70df2e0d",
+          "description" : "Internal Unique Member Engagement ID in the SHJ System"
+        },
+        "shjTxnID" : {
+          "type" : "string",
+          "example" : "f78yh77j-4a55-7743-89ai-2yua65df2e0d",
+          "description" : "Unique Transaction ID from the SHJ System."
+        },
+        "type" : {
+          "type" : "string",
+          "example" : "Case",
+          "description" : "Used by SHJ to designate if the request to CEE was an Update (Task) or New (Case) creation process."
+        },
+        "ceeEventTxnDt" : {
+          "type" : "string",
+          "example" : "1234567890",
+          "description" : "Unique identifier of the backend CEE system transaction."
+        },
+        "status" : {
+          "$ref" : "#/definitions/Status"
+        }
+      }
+    },
+    "Status" : {
+      "type" : "object",
+      "properties" : {
+        "code" : {
+          "type" : "string",
+          "example" : "200",
+          "description" : "HTTP Status Code from the backend system. Valid Values are 200 or 400"
+        },
+        "description" : {
+          "type" : "string",
+          "example" : "Bad Request",
+          "description" : "HTTP message from backend system - Success, error, etc."
+        },
+        "message" : {
+          "type" : "string",
+          "example" : "The request could not be understood by the server due to malformed syntax",
+          "description" : "The Details of \"why\" the error or success was sent."
+        },
+        "content" : {
+          "$ref" : "#/definitions/Content"
+        }
+      }
+    },
+    "Content" : {
+      "type" : "object",
+      "properties" : {
+        "ceeTxnId" : {
+          "type" : "string",
+          "example" : "1234567890",
+          "description" : "This is the unique transaction ID from the backend system"
+        },
+        "id" : {
+          "type" : "string",
+          "example" : "00TDF00000eDIQc2AO",
+          "description" : "This is the ID value that is returned as part of the Composite API call to SFDC/CEC, which equates to the ID of the member (contact ID)."
+        }
+      }
+    },
+    "ErrorStatus" : {
+      "type" : "object",
+      "properties" : {
+        "httpCode" : {
+          "type" : "string",
+          "example" : "500",
+          "description" : "Standard HTTP error codes. Sample values like 400, 404, 500 and other standard HTTP error codes"
+        },
+        "httpMessage" : {
+          "type" : "string",
+          "example" : "Back Service Unavailable",
+          "description" : "Standard error message. Sample values like \"Bad Request\", \"Not Found\", \"Internal Server Error\" and others"
+        },
+        "moreInformation" : {
+          "type" : "string",
+          "example" : "Backend Service Didn't Respond Within the Given Timeframe",
+          "description" : "Additional error information like \"[1000|Data related error][1002|Invalid Feature level]\" and \"[1000|Data related error][1002|Invalid Data - Membership Identifier value should not contain invalid characters]\" ..."
+        }
+      },
+      "description" : "Error class to return http error code, error message and additional error information. Error class will be used by IIB to return the error infomration to APIc and consumer."
+    },
+    "SHJMrequest" : {
+      "type" : "object",
+      "required" : [ "shj" ],
+      "properties" : {
+        "shj" : {
+          "type" : "array",
+          "items" : {
+            "$ref" : "#/definitions/Member"
+          }
+        }
+      }
+    },
+    "Member" : {
+      "type" : "object",
+      "required" : [ "shjCase", "shjmember" ],
+      "properties" : {
+        "specversion" : {
+          "type" : "string",
+          "example" : "1234",
+          "description" : "Version of the request from the SHJ System perspective."
+        },
+        "shjmember" : {
+          "$ref" : "#/definitions/SHJMember"
+        },
+        "shjCase" : {
+          "$ref" : "#/definitions/SHJcase"
+        },
+        "deliveryChannel" : {
+          "type" : "string",
+          "example" : "CEC",
+          "description" : "Where is the campaign being executed from - eg, CEC."
+        }
+      },
+      "description" : "cmmVersion:v16_7_20151113aThe relationship between an organization and an individual, when that individual is uniquely identified by the organization (e.g. insured individual and insurance agency; patient and healthcare provider, employee and employer).\n\nCMT: Extending this class as part of Clinical requirement"
+    },
+    "SHJMember" : {
+      "type" : "object",
+      "required" : [ "memberidentifier" ],
+      "properties" : {
+        "memberidentifier" : {
+          "$ref" : "#/definitions/Identifier"
+        },
+        "programName" : {
+          "type" : "string",
+          "example" : "A1A",
+          "description" : "Program name of the outreach, campaign or the assigned program by the business - eg, A1A."
+        }
+      }
+    },
+    "Identifier" : {
+      "type" : "object",
+      "properties" : {
+        "membershipId" : {
+          "type" : "string",
+          "example" : "5~123456789+10+1+20190101+754692+A+1",
+          "description" : "Combined with IDSource, is the unique identifier for one occurrence of the attached object (e.g., the unique identifier assigned to a membership resource). In some cases, the identifier value is a composite made up from multiple back-end identifiers, separated by plus signs, e.g., part1+part2+part3. This requires that NO identifier part ever contains a plus sign."
+        },
+        "proxyId" : {
+          "type" : "string",
+          "example" : "15~ff123456789f",
+          "description" : "Unique ID for the member within the IMI system."
+        }
+      },
+      "description" : "cmmVersion:v14_0A set of values that uniquely identify a single instance of an object. Identifiers must be unique across the entire current and future enterprise."
+    },
+    "SHJcase" : {
+      "type" : "object",
+      "required" : [ "personlizedContent", "shjTask" ],
+      "properties" : {
+        "shjID" : {
+          "type" : "string",
+          "example" : "fa9fb976-7a55-4149-86ac-2bda70df2e0d",
+          "description" : "Internal Unique Member Engagement ID in the SHJ System"
+        },
+        "shjTxnID" : {
+          "type" : "string",
+          "example" : "f78yh77j-4a55-7743-89ai-2yua65df2e0d",
+          "description" : "Unique Transaction ID from the SHJ System."
+        },
+        "caseAction" : {
+          "type" : "string",
+          "example" : "New",
+          "description" : "Used by SHJ to designate if the request to CEE was an Update (Task) or New (Case) creation process"
+        },
+        "caseReason" : {
+          "type" : "string",
+          "example" : "IFP Proactive",
+          "description" : "The reason that the case was created which usually pertains to the campaign."
+        },
+        "campaignId" : {
+          "type" : "string",
+          "example" : "92.01",
+          "description" : "Unique value for the campaign. The value is generated by the campaign management system - eg, SHJ."
+        },
+        "campaignName" : {
+          "type" : "string",
+          "example" : "IFP Proactive",
+          "description" : "Unique campaign name generated by the campaign management system, which may relate to a program."
+        },
+        "campaignOrigin" : {
+          "type" : "string",
+          "example" : "Smart Health Journey",
+          "description" : "Campaign Origin is what system, program or application is managing the campaign."
+        },
+        "campaignPriority" : {
+          "type" : "string",
+          "example" : "N/A",
+          "description" : "Campaign Priority relates to the origins system, program or applications priority for the campaign."
+        },
+        "contentTemplateId" : {
+          "type" : "string",
+          "example" : "shj_ifp_proactive",
+          "description" : "Used in the CEC system to call out the flow that is used for business Data Transformation normalization"
+        },
+        "shjTask" : {
+          "$ref" : "#/definitions/SHJTask"
+        },
+        "personlizedContent" : {
+          "$ref" : "#/definitions/PersonalizedContent"
+        },
+        "shjOpptyCreationDt" : {
+          "type" : "string",
+          "example" : "2024-10-31",
+          "description" : "Date that the SHJ Identifed the member for outreach"
+        },
+        "shjOpptyUpdatedDt" : {
+          "type" : "string",
+          "example" : "2024-10-31",
+          "description" : "Date that the SHJ Updated the member outreach"
+        },
+        "shjEventTransactionDt" : {
+          "type" : "string",
+          "example" : "2024-10-31",
+          "description" : "The Date that the Event task was sent to CEE/CEC"
+        }
+      }
+    },
+    "SHJTask" : {
+      "type" : "object",
+      "required" : [ "careManagementStaffer" ],
+      "properties" : {
+        "careManagementStaffer" : {
+          "$ref" : "#/definitions/CareManagementStaffer"
+        },
+        "comments" : {
+          "type" : "string",
+          "example" : "Your Attention is needed in the MC System for the member",
+          "description" : "Comments are free text area for context to the subject that the task is pertaining to."
+        },
+        "dueDate" : {
+          "type" : "string",
+          "example" : "2024-01-30",
+          "description" : "The date the task is due to completion by."
+        },
+        "priority" : {
+          "type" : "string",
+          "example" : "Escalated",
+          "description" : "Escalated"
+        },
+        "status" : {
+          "type" : "string",
+          "example" : "New",
+          "description" : "Status of the task. Default is \"new\" when task is created unless otherwise changed."
+        },
+        "subject" : {
+          "type" : "string",
+          "example" : "Changes in MC",
+          "description" : "Mandatory field. Subject should pertain to the task or case but it is free text."
+        },
+        "taskRecordType" : {
+          "type" : "string",
+          "example" : "Clinical_Smart_Health_Journey",
+          "description" : "Task Record Type pertains to the page layout that the clinician will use to work on the task. SHJ has it's own layout and taskRecordType."
+        },
+        "whoId" : {
+          "type" : "string",
+          "example" : "1234567890",
+          "description" : "WhoId is the unique field in the Contact Object - id field name, which pertains to the member (contactId)."
+        },
+        "whatId" : {
+          "type" : "string",
+          "example" : "1234567890",
+          "description" : "WhatId is the unique field in CEC Case Object, aka, Case ID."
+        }
+      }
+    },
+    "CareManagementStaffer" : {
+      "type" : "object",
+      "properties" : {
+        "assignedUserId" : {
+          "type" : "string",
+          "example" : "A123456",
+          "description" : "Employee ID for the Staffer managing/engaging the Member."
+        },
+        "assignedUserIdType" : {
+          "type" : "string",
+          "example" : "Employee",
+          "description" : "Type of User ID - eg, Employee."
+        },
+        "assignedUserName" : {
+          "type" : "string",
+          "example" : "Art Vandelay",
+          "description" : "The care team member or staffer or clinician manging the Member for the program."
+        },
+        "assignedUserRole" : {
+          "type" : "string",
+          "example" : "Care Manager",
+          "description" : "Role within the CEC system - eg, clinician"
+        },
+        "assignedUserEmail" : {
+          "type" : "string",
+          "example" : "avandelay@cvshealth.com",
+          "description" : "Email of the Staffer managing the Member"
+        },
+        "assignedUserPhone" : {
+          "type" : "string",
+          "example" : "212-555-1212",
+          "description" : "Telephone Number of the Staffer managing the Member."
+        }
+      }
+    },
+    "PersonalizedContent" : {
+      "type" : "object",
+      "properties" : {
+        "pregnancy_end_dt" : {
+          "type" : "string",
+          "example" : "2021-07-01",
+          "description" : "Date the pregnancy ended - usually in a birth."
+        },
+        "outreach_cohort" : {
+          "type" : "string",
+          "example" : "cohort_2",
+          "description" : "Outreach type relating tot he pregnancy."
+        }
+      },
+      "description" : "Personalized content is exactly as it sounds, personalized to the campaign outreach type, program and to the member themselves. The keys and values in the object will change and are not exact examples."
+    }
+  },
+  "externalDocs" : {
+    "url" : "https://"
+  }
+}
