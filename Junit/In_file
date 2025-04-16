@@ -1,0 +1,233 @@
+pom.xml
+------
+<dependencies>
+    <!-- Spring Boot Starter Test -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-test</artifactId>
+        <scope>test</scope>
+        <version>3.1.0</version> <!-- Use your Spring Boot version -->
+    </dependency>
+
+    <!-- Mockito -->
+    <dependency>
+        <groupId>org.mockito</groupId>
+        <artifactId>mockito-core</artifactId>
+        <version>5.3.1</version>
+        <scope>test</scope>
+    </dependency>
+
+    <!-- Mockito JUnit Jupiter Extension -->
+    <dependency>
+        <groupId>org.mockito</groupId>
+        <artifactId>mockito-junit-jupiter</artifactId>
+        <version>5.3.1</version>
+        <scope>test</scope>
+    </dependency>
+
+    <!-- AssertJ for fluent assertions -->
+    <dependency>
+        <groupId>org.assertj</groupId>
+        <artifactId>assertj-core</artifactId>
+        <version>3.24.2</version>
+        <scope>test</scope>
+    </dependency>
+
+    <!-- For testing multipart file uploads -->
+    <dependency>
+        <groupId>org.springframework</groupId>
+        <artifactId>spring-test</artifactId>
+        <version>6.0.9</version> <!-- Match your Spring version -->
+        <scope>test</scope>
+    </dependency>
+</dependencies>
+
+
+
+============================
+
+test java file 
+---------------
+package com.aetna.clinical.controller;
+
+import com.aetna.clinical.common.util.MembersHelper;
+import com.aetna.clinical.common.util.ShjFileProcessor;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.io.IOException;
+import java.util.Map;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+@DisplayName("SHJ Opportunity Controller Tests")
+class ShjOpportunityControllerTest {
+
+    @Mock
+    private MembersHelper memberHelper;
+
+    @Mock
+    private ShjFileProcessor shjFileProcessor;
+
+    @InjectMocks
+    private ShjOpportunityController shjOpportunityController;
+
+    private static final String TEST_API_URL = "http://test-odm-url.com";
+    private static final String TEST_FOUNDATION_URL = "http://test-foundation-model-url.com";
+    private static final String VALID_JSON = "{\"shj\":[{\"shjMember\":{\"memberIdentifier\":{\"membershipId\":\"123\"}}}]}";
+    
+    private HttpHeaders testHeaders;
+
+    @BeforeEach
+    void setUp() {
+        testHeaders = new HttpHeaders();
+        testHeaders.add("Content-Type", "application/json");
+        
+        ReflectionTestUtils.setField(shjOpportunityController, "apiUrl", TEST_API_URL);
+        ReflectionTestUtils.setField(shjOpportunityController, "foundationModelUrl", TEST_FOUNDATION_URL);
+        
+        when(memberHelper.buildHttpHeader()).thenReturn(testHeaders);
+    }
+
+    @Test
+    @DisplayName("Should process valid SHJ file successfully")
+    void processShjFile_Success() throws IOException {
+        // Given
+        MockMultipartFile file = createTestFile("test.json", VALID_JSON);
+        ResponseEntity<?> expectedResponse = ResponseEntity.ok(Map.of("status", "success"));
+        
+        when(shjFileProcessor.processFile(any(), eq(TEST_API_URL), eq(TEST_FOUNDATION_URL)))
+            .thenReturn(expectedResponse);
+
+        // When
+        ResponseEntity<?> actualResponse = shjOpportunityController.processShjFile(file);
+
+        // Then
+        assertThat(actualResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(actualResponse.getBody()).isInstanceOf(Map.class);
+        
+        verify(shjFileProcessor).processFile(
+            argThat(f -> f.getOriginalFilename().equals("test.json")),
+            eq(TEST_API_URL),
+            eq(TEST_FOUNDATION_URL)
+        );
+    }
+
+    @Test
+    @DisplayName("Should handle file read errors gracefully")
+    void processShjFile_IOException() throws IOException {
+        // Given
+        MockMultipartFile file = createTestFile("corrupt.json", "invalid content");
+        
+        when(shjFileProcessor.processFile(any(), anyString(), anyString()))
+            .thenThrow(new IOException("File read error"));
+
+        // When
+        ResponseEntity<?> response = shjOpportunityController.processShjFile(file);
+
+        // Then
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+        assertThat(response.getBody()).isInstanceOf(Map.class);
+        
+        Map<?, ?> responseBody = (Map<?, ?>) response.getBody();
+        assertThat(responseBody)
+            .containsKeys("Error", "transactionId", "status")
+            .hasEntrySatisfying("Error", error -> 
+                assertThat(error).asString().contains("File read error"));
+    }
+
+    @Test
+    @DisplayName("Should reject empty files")
+    void processShjFile_EmptyFile() {
+        // Given
+        MockMultipartFile emptyFile = new MockMultipartFile(
+            "file",
+            "empty.json",
+            "application/json",
+            new byte[0]
+        );
+
+        // When
+        ResponseEntity<?> response = shjOpportunityController.processShjFile(emptyFile);
+
+        // Then
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    // Additional helper method
+    private MockMultipartFile createTestFile(String filename, String content) {
+        return new MockMultipartFile(
+            "file",
+            filename,
+            "application/json",
+            content.getBytes()
+        );
+    }
+}
+
+===================================
+
+Junit properties in path as : src/test/resources/junit-platform.properties
+====================================================================
+
+# JUnit Platform configuration
+junit.jupiter.testinstance.lifecycle.default = per_class
+junit.jupiter.execution.parallel.enabled = true
+junit.jupiter.execution.parallel.mode.default = concurrent
+
+===================================
+logging configuration at : src/test/resources/application-test.properties
+
+# Test logging configuration
+logging.level.com.aetna.clinical=DEBUG
+logging.level.org.springframework=WARN
+logging.level.root=WARN
+
+========================================
+
+run commands
+
+mvn test
+
+mvn test -Dtest=ShjOpportunityControllerTest
+
+======
+coverage
+-------
+<plugin>
+    <groupId>org.jacoco</groupId>
+    <artifactId>jacoco-maven-plugin</artifactId>
+    <version>0.8.8</version>
+    <executions>
+        <execution>
+            <goals>
+                <goal>prepare-agent</goal>
+            </goals>
+        </execution>
+        <execution>
+            <id>report</id>
+            <phase>test</phase>
+            <goals>
+                <goal>report</goal>
+            </goals>
+        </execution>
+    </executions>
+</plugin>
+
+===========
+ run command : mvn clean test jacoco:report
