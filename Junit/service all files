@@ -1,0 +1,1143 @@
+CaseProcessor
+===============
+
+package com.aetna.clinical.common.service;
+
+import com.aetna.clinical.common.util.CaseConstants;
+import com.aetna.clinical.common.dto.csr.ReqForCase;
+import com.aetna.clinical.common.dto.csr.ShjCompositeReqForCase;
+import com.aetna.clinical.common.dto.csr.ShjCompositeResponseForCase;
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.common.util.StringUtils;
+import jakarta.validation.ValidationException;
+import com.aetna.clinical.common.exceptions.ServiceException;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.*;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+
+@Service
+public class CaseProcessor extends ShjRequestProcessor<ShjCompositeReqForCase, ShjCompositeResponseForCase> {
+
+    @Value("${SFHC.apic.producer_url}")
+    private String serviceUrl;
+
+    public CaseProcessor(ObjectMapper objectMapper, RestTemplate restTemplate) {
+        super(objectMapper, restTemplate);
+    }
+
+    /*public CaseProcessor() {
+        super();
+    }*/
+
+    @Override
+    protected void validateRequest(ShjRequest request, String transactionId) {
+        request.getShj().forEach(shj -> {
+            if (!"new".equalsIgnoreCase(shj.getShjMember().getShjCase().getCaseAction())) {
+                throw new ValidationException("Invalid case action for Case Processor");
+            }
+
+            ShjRequest.ShjMember member = shj.getShjMember();
+            if (member == null || member.getMemberIdentifier() == null) {
+                throw new ValidationException("Member identifier is missing");
+            }
+            if(StringUtils.isBlank(member.getMemberIdentifier().getMembershipId())) {
+                throw new ValidationException("Membership ID is missing");
+            }
+            if(member.getShjCase() == null || member.getShjCase().getShjID() == null) {
+                throw new ValidationException("Shj Case is missing");
+            }
+        });
+    }
+
+    @Override
+    protected ShjCompositeReqForCase buildServiceRequest(ShjRequest request, String transactionId) {
+        return request.getShj().stream()
+                .findFirst()
+                .map(this::buildCaseRequest)
+                .orElseThrow(() -> new ValidationException("No valid case request found"));
+    }
+
+    private ShjCompositeReqForCase buildCaseRequest(ShjRequest.Shj shj) {
+        ShjCompositeReqForCase caseRequest = new ShjCompositeReqForCase();
+        List<ReqForCase> requests = new ArrayList<>();
+
+        requests.add(buildMemberPlanRequest(shj));
+        requests.add(buildAccountRequest(shj));
+        requests.add(buildCaseUpdateRequest(shj));
+        requests.add(buildCsrRequest(shj));
+        requests.add(buildCsrDetailsRequest(shj));
+
+        caseRequest.setCompositeRequest(requests);
+        return caseRequest;
+
+    }
+
+    private ReqForCase buildCsrDetailsRequest(ShjRequest.Shj shj) {
+        // Build the CSR details request here
+        Map<String, Object> csrdBody = createCsrdBody();
+        return createReqForCase(CaseConstants.POST_METHOD,
+                CaseConstants.CSRDetails_Url,
+                CaseConstants.Reference_CSRDetails,
+                csrdBody);
+    }
+
+    private Map<String, Object> createCsrdBody() {
+        Map<String, Object> body = new HashMap<>();
+        body.put(CaseConstants.CSRDetails_RecordType_CSR_Id, CaseConstants.CSRDetails_RecordType_CSR_Id_Value);
+
+        return body;
+    }
+
+    private ReqForCase buildCsrRequest(ShjRequest.Shj shj) {
+        // Build the CSR request here
+        Map<String, Object> csrBody = createCsrBody(shj);
+
+        return createReqForCase(CaseConstants.PATCH_METHOD,
+                CaseConstants.CSR_Url.replace(CaseConstants.CSR_External_ID_SHJ__c,
+                        shj.getShjMember().getShjCase().getShjID().replace("+", "%2B")
+                                .replace("-","%2B").replace(" ","%2B")),
+                CaseConstants.Reference_CSR_ID, csrBody);
+
+
+    }
+
+    private Map<String, Object> createCsrBody(ShjRequest.Shj shj) {
+        Map<String, Object> body = new HashMap<>();
+        Map<String, String> recordType = new HashMap<>();
+        recordType.put(CaseConstants.CSR_RecordType_Name, CaseConstants.CSR_RecordType_Name_Value);
+        body.put(CaseConstants.RecordType, recordType);
+        body.put(CaseConstants.CSR_PatientId, CaseConstants.CSR_PatientId_Value);
+        body.put(CaseConstants.CSR_Case__c, CaseConstants.CSR_Case__c_Value);
+        body.put(CaseConstants.CSR_Type, CaseConstants.CSR_Type_Value);
+        body.put(CaseConstants.CSR_SourceSystem, CaseConstants.CSR_SourceSystem_Value);
+        body.put(CaseConstants.CSR_Status, getShjCasePropertyForShjTask(shj, ShjRequest.ShjTask::getStatus)); // change
+        body.put(CaseConstants.CSR_Priority, getShjCasePropertyForShjTask(shj, ShjRequest.ShjTask::getPriority)); //Change
+
+        return body;
+    }
+
+    private ReqForCase buildCaseUpdateRequest(ShjRequest.Shj shj) {
+
+        // Build the case update request here
+        Map<String, Object> caseBody = createCaseBody(shj);
+
+        return createReqForCase(CaseConstants.PATCH_METHOD,
+                CaseConstants.Case_Url.replace(CaseConstants.CASE_External_ID_SHJ__c,
+                        shj.getShjMember().getShjCase().getShjID().replace("+", "%2B")
+                                .replace("-","%2B").replace(" ","%2B")),
+                CaseConstants.Reference_CASE,
+                caseBody);
+
+    }
+
+    private Map<String, Object> createCaseBody(ShjRequest.Shj shj) {
+        Map<String, Object> body = new HashMap<>();
+        Map<String, String> recordType = new HashMap<>();
+        recordType.put(CaseConstants.Case_RecordType_Name, CaseConstants.Case_RecordType_Name_Value);
+        body.put(CaseConstants.RecordType, recordType);
+        body.put(CaseConstants.Case_AccountId, CaseConstants.Case_AccountId_Value);
+        body.put(CaseConstants.Case_Member_Plan__c, CaseConstants.Case_Member_Plan__c_Value);
+        body.put(CaseConstants.Case_Origin, CaseConstants.Case_Origin_Value);
+        body.put(CaseConstants.Case_Type, CaseConstants.Case_Type_Value);
+
+        body.put(CaseConstants.Case_Reason, getShjCasePropertyForShjCase(shj, ShjRequest.ShjCase::getCaseReason)); // change
+        body.put(CaseConstants.Case_Priority, getShjCasePropertyForShjTask(shj, ShjRequest.ShjTask::getPriority)); // change
+        body.put(CaseConstants.Case_Status, getShjCasePropertyForShjTask(shj, ShjRequest.ShjTask::getStatus)); // change
+        return body;
+    }
+
+    private <T> T getShjCasePropertyForShjCase(ShjRequest.Shj shj, Function<ShjRequest.ShjCase, T> propertyExtractor) {
+        if(shj == null){
+            return null;
+        }
+        ShjRequest.ShjMember member = shj.getShjMember();
+        if (member == null) {
+            return null;
+        }
+        ShjRequest.ShjCase shjCase = member.getShjCase();
+        if (shjCase == null) {
+            return null;
+        }
+        return propertyExtractor.apply(shjCase);
+    }
+
+    private <T> T getShjCasePropertyForShjTask(ShjRequest.Shj shj, Function<ShjRequest.ShjTask, T> propertyExtractor) {
+        if(shj == null){
+            return null;
+        }
+        ShjRequest.ShjMember member = shj.getShjMember();
+        if (member == null) {
+            return null;
+        }
+        ShjRequest.ShjTask shjTask = member.getShjCase().getShjTask();
+        if (shjTask == null) {
+            return null;
+        }
+        return propertyExtractor.apply(shjTask);
+    }
+
+    private ReqForCase buildAccountRequest(ShjRequest.Shj shj) {
+        // Build the account request here
+        return createReqForCase(CaseConstants.GET_METHOD,
+                CaseConstants.Account_Url.replace(CaseConstants.External_ID__c, shj.getShjMember().getMemberIdentifier().getProxyId()),
+                CaseConstants.Reference_ACCOUNT_ID, null);
+    }
+
+    private ReqForCase buildMemberPlanRequest(ShjRequest.Shj shj) {
+        // Build the member plan request here
+        return createReqForCase(CaseConstants.GET_METHOD,
+                CaseConstants.Member_Plan_url.replace(CaseConstants.CMM_External_Id__c,
+                        shj.getShjMember().getMemberIdentifier().
+                                getMembershipId().replace("+", "%2B")
+                                .replace("-","%2B").replace(" ","%2B")),
+                CaseConstants.Reference_MEMBER_PLAN_ID, null);
+    }
+
+    private ReqForCase createReqForCase(String method, String url, String referenceId, Map<String, Object> body) {
+        ReqForCase reqForCase = new ReqForCase();
+        reqForCase.setMethod(method);
+        reqForCase.setUrl(url);
+        reqForCase.setReferenceId(referenceId);
+        reqForCase.setBody(body);
+        return reqForCase;
+    }
+
+    private String encodeId(String membershipId) {
+        return membershipId.replace("+", "%20");
+    }
+
+    @Override
+    protected ResponseEntity<?> executeServiceCall(ShjCompositeReqForCase request, HttpHeaders headers, String transactionId) {
+        try {
+            String requestBody = objectMapper.writeValueAsString(request);
+            logger.info("Request Body: {}", requestBody);
+            HttpEntity<ShjCompositeReqForCase> entity = new HttpEntity<>(request, headers);
+
+            ResponseEntity<ShjCompositeResponseForCase> response =
+                    restTemplate.exchange(serviceUrl, HttpMethod.POST, entity, ShjCompositeResponseForCase.class);
+            String responseBody = objectMapper.writeValueAsString(response.getBody());
+            logger.info("Response Body: {}", responseBody.toString());
+
+            return processCaseResponse(response,transactionId);
+        } catch (HttpServerErrorException e) {
+            logger.error("Error calling Case service: {}", e.getMessage(), e);
+            throw new ServiceException("Error calling Case service: " + e.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
+        } catch (HttpClientErrorException e) {
+            logger.error("Client error calling Case service: {}", e.getMessage(), e);
+            throw new ServiceException("Client error calling Case service: " + e.getMessage(), HttpStatus.BAD_REQUEST);
+        } catch (Exception e) {
+            logger.error("Unexpected error calling Case service: {}", e.getMessage(), e);
+            throw new ServiceException("Unexpected error calling Case service: " + e.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    private ResponseEntity<?> processCaseResponse(ResponseEntity<ShjCompositeResponseForCase> response, String transactionId) {
+        if(response.getBody() == null) {
+            throw new ServiceException("Empty Response from Case Service", HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+        Map<String, Object> result = new HashMap<>();
+        Map<String, Object> caseError = new HashMap<>();
+        if(response.getBody() == null || response.getBody().getCompositeResponse() == null || response.getBody().getCompositeResponse().isEmpty()) {
+            throw new ServiceException("No composite response found", HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+        for (ShjCompositeResponseForCase.CompositeResponse item : response.getBody().getCompositeResponse()) {
+            if (item.getHttpStatusCode() > 400) {
+                throw new ServiceException("Case Service failed: " + item.getReferenceId(),
+                        HttpStatus.valueOf(item.getHttpStatusCode()));
+            }
+            if(item.getHttpStatusCode() == 400){
+                logger.error("Error calling Case service: {}", item.getBody().getErrors());
+                caseError.put(item.getReferenceId(), item.getBody().getErrors());
+                caseError.put("status", "failed");
+               // caseError.put("transactionId", transactionId);
+               // return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(caseError);
+               return ResponseEntity.status(400).body(caseError);
+                       //status(HttpStatus.BAD_REQUEST).body(caseError);
+                       //badRequest().body(caseError);
+
+            }
+
+            if(item.getBody() != null) {
+                if(item.getBody().getRecords() != null && !item.getBody().getRecords().isEmpty()){
+                    result.put(item.getReferenceId(), item.getBody().getRecords().get(0).getId());
+                } else if(item.getBody().getId() != null) {
+                    result.put(item.getReferenceId(), item.getBody().getId());
+                }
+            }
+        }
+        result.put("status", "success");
+        return ResponseEntity.ok(result);
+    }
+}
+==================================================================================================
+FoundationModelService
+------------------------
+
+package com.aetna.clinical.common.service;
+
+import com.aetna.clinical.common.dto.response.FoundationalModelResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@Service
+public class FoundationModelService {
+
+    @Autowired
+    @Qualifier("proxyRestTemplate")
+    private RestTemplate restTemplate;
+
+    private final Logger logger = LoggerFactory.getLogger(FoundationModelService.class);
+
+
+    public ResponseEntity<?> runService(String cmmId, String proxyId, String url, String transactionId) {
+        // Implement the logic to call the service here
+       logger.info("Running Foundation Model Service with cmmId: {}, proxyId: {}, url: {}, transactionId: {}", cmmId, proxyId, url, transactionId);
+        //RestTemplate restTemplate = new RestTemplate();
+
+
+        try{
+            Map<String, String> requestBody  = new HashMap<>();
+            requestBody.put("cmmExternalId", cmmId);
+            requestBody.put("proxyId", proxyId);
+
+            HttpEntity<Map<String, String>> requestEntity = new HttpEntity<>(requestBody);
+            ResponseEntity<FoundationalModelResponse> response =
+                    restTemplate.exchange(
+                            url,
+                            HttpMethod.POST,
+                            requestEntity,
+                            FoundationalModelResponse.class);
+
+            logger.info("Service response status: {}", response.getStatusCode());
+
+            return processResponse(response);
+        }
+        catch (Exception e) {
+            logger.error("Error calling service: {}", e.getMessage(), e);
+            return ResponseEntity.status(500).body(Map.of("Error", "Service call failed: " + e.getMessage())
+                );
+        }
+    }
+
+    private ResponseEntity<?> processResponse(ResponseEntity<FoundationalModelResponse> response) {
+        // Process the response as needed
+        if (response.getStatusCode().is2xxSuccessful()
+                && response.getBody() != null && response.getBody().getResponseCode() == 200) {
+            FoundationalModelResponse body = response.getBody();
+            Map<String, Object> result = new HashMap<>();
+            if(body !=null &&
+                    body.getReferenceIds() != null){
+                // Extract reference IDs from the response
+                FoundationalModelResponse.ReferenceIds referenceIds = body.getReferenceIds();
+                result.put("UpsertedContactPointPhone",
+                        referenceIds.getUpsertedContactPointAddress());
+                result.put("UpsertedMemberPlan", referenceIds.getUpsertedMemberPlan());
+                result.put("UpsertedContactPointEmail", referenceIds.getUpsertedContactPointEmail());
+                result.put("UpsertedContactPointAddress", referenceIds.getUpsertedContactPointAddress());
+                result.put("UpsertedAccount", referenceIds.getUpsertedAccount());
+                result.put("refMemberPlanMedicaidRecTypeId", referenceIds.getRefMemberPlanMedicaidRecTypeId());
+                result.put("UpsertedPurchaserPlan", referenceIds.getUpsertedPurchaserPlan());
+
+                return ResponseEntity.ok(result);
+            }
+            else{
+                return ResponseEntity.status(400)
+                        .body(Map.of("Error", "Bad Request: " + response.getBody().getResponseMsg()));
+            }
+        }
+        if(response.getStatusCode().is2xxSuccessful()
+                && response.getBody() != null && response.getBody().getResponseCode() == 400){
+            return ResponseEntity.status(400)
+                    .body(Map.of("Error", "Bad Request: " + response.getBody().getResponseMsg()));
+        }
+        if(response.getStatusCode().is2xxSuccessful()
+                && response.getBody() != null && response.getBody().getResponseCode() == 500){
+            return ResponseEntity.status(500)
+                    .body(Map.of("Error", "Internal Server Error: " + response.getBody().getResponseMsg()));
+        }
+        else{
+            return ResponseEntity.status(500)
+                    .body(Map.of("Error", "Service call failed"));
+        }
+    }
+
+}
+===========================================================================================
+OdmService
+-----------
+
+package com.aetna.clinical.common.service;
+
+import com.aetna.clinical.common.dto.response.OdmResponse;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
+import lombok.RequiredArgsConstructor;
+import com.aetna.clinical.common.exceptions.ServiceException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.RestTemplate;
+import com.aetna.clinical.common.exceptions.*;
+
+import java.util.Map;
+
+@Service
+@RequiredArgsConstructor
+public class OdmService {
+
+    @Autowired
+    @Qualifier("proxyRestTemplate")
+    private RestTemplate restTemplate;
+    private static final Logger logger = LoggerFactory.getLogger(OdmService.class);
+
+    public ResponseEntity<OdmResponse> callOdmService(String apiUrl,
+                                                      String requestBody,
+                                                      String transactionId,
+                                                      HttpHeaders headers) throws Exception{
+
+        try {
+            logger.info("Calling ODM service at: {}", apiUrl);
+
+
+            HttpEntity<String> membersEntity = new HttpEntity<>(requestBody, headers);
+
+            // Make the API call
+            ResponseEntity<OdmResponse> response = restTemplate.exchange(
+                    apiUrl,
+                    HttpMethod.POST,
+                    membersEntity,
+                    OdmResponse.class);
+
+            logger.info("ODM service response status: {}", response.getStatusCode());
+            return response;
+        }catch (ServiceException e) {
+            logger.error("Unexpected error calling ODM service: {}", e.getMessage(), e);
+            return ResponseEntity.badRequest().build();
+        }catch (Exception e) {
+            logger.error("Error calling ODM service: {}", e.getMessage(), e);
+            return ResponseEntity.status(500).build();
+        }
+    }
+
+    // Optional: Add method for parsing ODM response
+    /*public Map<String, Object> parseOdmResponse(String responseBody) throws JsonProcessingException {
+        return objectMapper.readValue(responseBody, new TypeReference<Map<String, Object>>() {});
+    }*/
+}
+
+==================================================
+
+ShjRequestProcessor
+--------------------
+
+package com.aetna.clinical.common.service;
+
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.validation.ValidationException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.Map;
+
+public abstract class ShjRequestProcessor<Req,Res> {
+
+    protected final Logger logger = LoggerFactory.getLogger(getClass());
+    protected final ObjectMapper objectMapper;
+
+    @Autowired
+    @Qualifier("proxyRestTemplate")
+    protected final RestTemplate restTemplate;
+
+
+    protected ShjRequestProcessor(ObjectMapper objectMapper, RestTemplate restTemplate) {
+        this.objectMapper = objectMapper;
+        this.restTemplate = restTemplate;
+    }
+
+    public ResponseEntity<?> process(String payload, String transactionId, HttpHeaders headers){
+        try{
+            ShjRequest request = parseRequest(payload);
+            validateRequest(request, transactionId);
+            Req serviceRequest = buildServiceRequest(request, transactionId);
+            return executeServiceCall(serviceRequest, headers, transactionId);
+        }catch (ValidationException e){
+            logger.error("Validation error: {}", e.getMessage());
+            return ResponseEntity.badRequest()
+                    .body(Map.of("Error", "Validation error: " + e.getMessage(),
+                            "transactionId", transactionId));
+        }catch (Exception e){
+            logger.error("Error processing failed: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("Error", "Processing failed: " + e.getMessage(),
+                            "transactionId", transactionId));
+        }
+    }
+
+    protected ShjRequest parseRequest(String payload) throws JsonProcessingException {
+        return objectMapper.readValue(payload, ShjRequest.class);
+    }
+
+    protected abstract void validateRequest(ShjRequest request, String transactionId);
+
+    protected abstract Req buildServiceRequest(ShjRequest request, String transactionId);
+
+    protected abstract ResponseEntity<?> executeServiceCall(Req request, HttpHeaders headers, String transactionId) throws JsonProcessingException;
+}
+
+=======================================================================
+TaskProcessor
+-------------
+
+package com.aetna.clinical.common.service;
+
+import com.aetna.clinical.common.util.TaskConstants;
+import com.aetna.clinical.common.dto.task.ReqForTask;
+import com.aetna.clinical.common.dto.task.ShjCompositeReqForTask;
+import com.aetna.clinical.common.dto.task.ShjCompositeResponseForTask;
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.common.util.StringUtils;
+import jakarta.validation.ValidationException;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.*;
+import org.springframework.stereotype.Service;
+import org.springframework.web.ErrorResponse;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Stream;
+
+@Service
+public class TaskProcessor extends ShjRequestProcessor<ShjCompositeReqForTask, ShjCompositeResponseForTask> {
+
+    @Value("${SFHC.apic.producer_url}")
+    private String serviceUrl;
+    
+    public TaskProcessor(ObjectMapper objectMapper, RestTemplate restTemplate) {
+        super(objectMapper, restTemplate);
+       
+    }
+
+    @Override
+    protected void validateRequest(ShjRequest request, String transactionId) {
+        request.getShj().forEach(shj -> {
+            if (!"update".equalsIgnoreCase(shj.getShjMember().getShjCase().getCaseAction())) {
+                throw new ValidationException("Invalid case action for task Update");
+            }
+
+            ShjRequest.ShjMember member = shj.getShjMember();
+            if (member == null || member.getMemberIdentifier() == null) {
+                throw new ValidationException("Member identifier is missing");
+            }
+            if(StringUtils.isBlank(member.getMemberIdentifier().getMembershipId())) {
+                throw new ValidationException("Membership ID is missing");
+            }
+            if(member.getShjCase() == null || member.getShjCase().getShjID() == null) {
+                throw new ValidationException("Shj Case is missing");
+            }
+            if(member.getShjCase().getShjTask() == null || member.getShjCase().getShjTask().getCareManagementStaffer() == null) {
+                throw new ValidationException("Shj Task information is missing");
+            }
+        });
+    }
+    
+    @Override
+    protected ShjCompositeReqForTask buildServiceRequest(ShjRequest request, String transactionId) {
+        return request.getShj().stream()
+                .findFirst()
+                .map(this::buildTaskRequest)
+                .orElseThrow(() -> new ValidationException("No valid task request found"));
+    }
+    
+    private ShjCompositeReqForTask buildTaskRequest(ShjRequest.Shj shj) {
+        ShjCompositeReqForTask taskRequest = new ShjCompositeReqForTask();
+        List<ReqForTask> requests = new ArrayList<>();
+        
+        requests.add(buildMemberPlanRequest(shj));
+        requests.add(buildRecTypeRequest(shj));
+        requests.add(buildAccountRequest(shj));
+        requests.add(buildUserRequest(shj));
+        requests.add(buildTaskUpdateRequest(shj));
+        
+        taskRequest.setCompositeRequest(requests);
+        return taskRequest;
+    }
+
+    private ReqForTask buildRecTypeRequest(ShjRequest.Shj shj) {
+        return createReqForTask(
+                TaskConstants.GET_METHOD,
+                TaskConstants.Record_TYPE_Url,
+                TaskConstants.Reference_REC_TYPE_ID);
+    }
+
+    private ReqForTask buildTaskUpdateRequest(ShjRequest.Shj shj) {
+        ReqForTask task = createReqForTask(
+                TaskConstants.PATCH_METHOD,
+                TaskConstants.Task_Url.replace(TaskConstants.External_ID_SHJ__c,
+                        shj.getShjMember().getShjCase().getShjID().replace("-", "%2B")),
+                TaskConstants.Reference_TASK);
+
+        Map<String, Object> body = new HashMap<>();
+        body.put(TaskConstants.WHO_ID, TaskConstants.WHO_ID_VALUE);
+        body.put(TaskConstants.OWNER_ID, TaskConstants.OWNER_ID_VALUE);
+        body.put(TaskConstants.RECORD_TYPE_ID, TaskConstants.RECORD_TYPE_ID_VALUE);
+        body.put(TaskConstants.WHAT_ID, TaskConstants.WHAT_ID_VALUE);
+        //  body.put(TaskConstants.STATUS, TaskConstants.STATUS_VALUE);
+        Stream.of(
+                        Map.entry(TaskConstants.Description, getShjTaskProperty(shj, ShjRequest.ShjTask::getComments)),
+                        Map.entry(TaskConstants.ActivityDate, getShjTaskProperty(shj, ShjRequest.ShjTask::getDueDate)),
+                        Map.entry(TaskConstants.Priority, getShjTaskProperty(shj, ShjRequest.ShjTask::getPriority)),
+                        Map.entry(TaskConstants.Subject, getShjTaskProperty(shj, ShjRequest.ShjTask::getSubject)),
+                        Map.entry(TaskConstants.STATUS, getShjTaskProperty(shj, ShjRequest.ShjTask::getStatus))
+                ).filter(entry -> entry.getValue() != null) // Ensure the value is not null
+                .forEach(entry -> {
+                    if (entry.getValue() != null) { // Additional null check for safety
+                        body.put(entry.getKey(), entry.getValue());
+                    }else {
+                        logger.error("Filed {} and value is {} ",entry.getKey(),entry.getKey());
+                        throw new ValidationException("Field " + entry.getKey() + " cannot be null");
+                    }
+                });
+        task.setBody(body);
+
+        return task;
+    }
+
+    private <T> T getShjTaskProperty(ShjRequest.Shj shj, Function<ShjRequest.ShjTask, T> propertyExtractor) {
+        if(shj == null){
+            return null;
+        }
+        ShjRequest.ShjMember member = shj.getShjMember();
+        if (member == null) {
+            return null;
+        }
+        ShjRequest.ShjCase shjCase = member.getShjCase();
+        if (shjCase == null) {
+            return null;
+        }
+        ShjRequest.ShjTask shjTask = shjCase.getShjTask();
+        if (shjTask == null) {
+            return null;
+        }
+        return propertyExtractor.apply(shjTask);
+    }
+
+    private ReqForTask buildUserRequest(ShjRequest.Shj shj) {
+        ShjRequest.ShjTask shjTask = shj.getShjMember().getShjCase().getShjTask();
+        if (shjTask != null && shjTask.getCareManagementStaffer() != null && shjTask.getCareManagementStaffer().getAssignedUserId() != null) {
+            return createReqForTask(
+                    TaskConstants.GET_METHOD,
+                    TaskConstants.User_Url.replace(TaskConstants.FEDERAL_IDENTIFIER,
+                            shjTask.getCareManagementStaffer().getAssignedUserId()),
+                    TaskConstants.Reference_USER_ID);
+        } else {
+            logger.error("ShjTask or CareManagementStaffer is null for transaction ID: {}", shj.getShjMember().getShjCase().getShjID());
+            throw new ValidationException("UserId is null");
+        }
+    }
+
+    private ReqForTask buildAccountRequest(ShjRequest.Shj shj) {
+        return createReqForTask(
+                TaskConstants.GET_METHOD,
+                TaskConstants.Account_Url.replace(TaskConstants.Account_External_ID__c,
+                        shj.getShjMember().getMemberIdentifier().getProxyId()),
+                TaskConstants.Reference_ACCOUNT_ID);
+    }
+
+    private ReqForTask buildMemberPlanRequest(ShjRequest.Shj shj) {
+
+        return createReqForTask(
+                TaskConstants.GET_METHOD,
+                TaskConstants.Member_Plan_url_For_TASK.replace(TaskConstants.CMM_External_Id__c,
+                        shj.getShjMember().getMemberIdentifier().getMembershipId().replace("+","%2B").replace(" ","%20").replace("-","%2B")),
+                TaskConstants.Reference_MEMBER_PLAN_ID);
+
+    }
+
+    private ReqForTask createReqForTask(String method, String url, String referenceId) {
+        ReqForTask reqForTask = new ReqForTask();
+        reqForTask.setMethod(method);
+        reqForTask.setUrl(url);
+        reqForTask.setReferenceId(referenceId);
+        logger.info("Request: Method={}, URL={}, ReferenceId={}", method, url, referenceId);
+        return reqForTask;
+    }
+
+    private String encodeId(String membershipId) {
+        return membershipId.replace("+", "%2B");
+    }
+
+    @Override
+    protected ResponseEntity<?> executeServiceCall(ShjCompositeReqForTask request, HttpHeaders headers, String transactionId) {
+        try {
+             String requestBody = objectMapper.writeValueAsString(request);
+             logger.info("Request Body: {}", requestBody);
+
+            HttpEntity<ShjCompositeReqForTask> entity = new HttpEntity<>(request, headers);
+
+            ResponseEntity<ShjCompositeResponseForTask> response =
+                    restTemplate.exchange(serviceUrl, HttpMethod.POST, entity, ShjCompositeResponseForTask.class);
+            String result = objectMapper.writeValueAsString(response.getBody());
+            logger.info("Response Body: {}", result);
+            return processTaskResponse(response, transactionId);
+        } catch (HttpClientErrorException e) {
+            return ResponseEntity.status(e.getStatusCode())
+                    .body("Client error: " + e.getResponseBodyAsString());
+        } catch (Exception e) {
+            logger.error("Error calling SHJ service: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Service call failed: " + e.getMessage());
+        } finally {
+            logger.info("Completed processing for transaction ID: {}", transactionId);
+        }
+    }
+    private ResponseEntity<?> processTaskResponse(ResponseEntity<ShjCompositeResponseForTask> response, String transactionId) {
+        if (response.getBody() == null) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Response body is null from SHJ Service");
+        }
+
+        Map<String, Object> responseMapOk = new HashMap<>();
+        Map<String, Object> responseMapError = new HashMap<>();
+
+        responseMapOk.put("transactionId", transactionId);
+        responseMapOk.put("statusCode", response.getStatusCodeValue());
+        boolean hasError = false;
+
+        if(response.getBody().getCompositeResponse() != null) {
+            for (ShjCompositeResponseForTask.CompositeResponse compositeResponse :
+                    response.getBody().getCompositeResponse()) {
+
+                if (compositeResponse.hasErrors()) {
+                    // Handle error response
+                    responseMapError.put(compositeResponse.getReferenceId() + "_error",
+                            compositeResponse.getErrors());
+                    responseMapError.put("httpStatusCode", compositeResponse.getHttpStatusCode());
+                    responseMapError.put("transactionId", transactionId);
+                    hasError = true;
+                } else if (compositeResponse.getBody() != null) {
+                    // Handle success response
+                    ShjCompositeResponseForTask.Body body = compositeResponse.getBody();
+                    if (TaskConstants.Reference_TASK.equalsIgnoreCase(compositeResponse.getReferenceId())) {
+                        responseMapOk.put(compositeResponse.getReferenceId(), body.getId());
+                    } else if (body.getRecords() != null && !body.getRecords().isEmpty()) {
+                        responseMapOk.put(compositeResponse.getReferenceId(),
+                                body.getRecords().get(0).getId());
+                    }
+                }
+                if (hasError) {
+                    logger.error("Error in SHJ Service response: {}", compositeResponse.getErrors());
+                    return ResponseEntity.badRequest().body(responseMapError);
+                }
+            }
+            return ResponseEntity.ok(responseMapOk);
+        }else {
+            logger.error("No composite response found in SHJ Service response");
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("No composite response found in SHJ Service response");
+        }
+    }
+}
+=====================================================================
+VerifyMemberProcessor
+--------------------
+
+package com.aetna.clinical.common.service;
+
+import com.aetna.clinical.common.util.VerifyMemberConstants;
+import com.aetna.clinical.common.dto.task.ShjCompositeResponseForTask;
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest;
+import com.aetna.clinical.common.dto.verifymember.ReqForVerifyMember;
+import com.aetna.clinical.common.dto.verifymember.ShjCompositeReqForVerifyMember;
+import com.aetna.clinical.common.dto.verifymember.ShjCompositeResponseForVerifyMember;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.common.util.StringUtils;
+import jakarta.validation.ValidationException;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.*;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+@Service
+public class VerifyMemberProcessor extends ShjRequestProcessor<ShjCompositeReqForVerifyMember, ShjCompositeResponseForVerifyMember> {
+
+    @Value("${SFHC.apic.producer_url}")
+    private String serviceUrl;
+
+    @Autowired
+    private CaseProcessor caseProcessor;
+
+    public VerifyMemberProcessor(ObjectMapper objectMapper, RestTemplate restTemplate) {
+        super(objectMapper, restTemplate);
+    }
+
+    @Override
+    protected void validateRequest(ShjRequest request, String transactionId) {
+        request.getShj().forEach(shj -> {
+            if (!"new".equalsIgnoreCase(shj.getShjMember().getShjCase().getCaseAction())) {
+                throw new ValidationException("Invalid case action for Verify Member");
+            }
+
+            ShjRequest.ShjMember member = shj.getShjMember();
+            if (member == null || member.getMemberIdentifier() == null) {
+                throw new ValidationException("Member identifier is missing");
+            }
+            if(StringUtils.isBlank(member.getMemberIdentifier().getMembershipId())) {
+                throw new ValidationException("Membership ID is missing");
+            }
+            if(member.getShjCase() == null || member.getShjCase().getShjID() == null) {
+                throw new ValidationException("Shj Case is missing");
+            }
+        });
+    }
+
+
+    @Override
+    protected ShjCompositeReqForVerifyMember buildServiceRequest(ShjRequest request, String transactionId) {
+        return request.getShj().stream()
+                .findFirst()
+                .map(this::buildVerifyMemberRequest)
+                .orElseThrow(() -> new ValidationException("No valid Verify Member request found"));
+    }
+
+    private ShjCompositeReqForVerifyMember buildVerifyMemberRequest(ShjRequest.Shj shj) {
+        ShjCompositeReqForVerifyMember request = new ShjCompositeReqForVerifyMember();
+        List<ReqForVerifyMember> requests = new ArrayList<>();
+
+        requests.add(createReqForVerifyMember(
+                VerifyMemberConstants.GET_METHOD,
+                VerifyMemberConstants.MEMBER_PLAN_URL.replace(VerifyMemberConstants.External_ID__c, shj.getShjMember().getMemberIdentifier().getMembershipId().replace("+", "%2B")
+                        .replace("-","%2B").replace(" ","%2B")),
+                VerifyMemberConstants.REFRESH_MEMBER_PLAN
+        ));
+
+        request.setCompositeRequest(requests);
+        return request;
+    }
+
+    private ReqForVerifyMember createReqForVerifyMember(String getMethod, String url, String refreshMemberPlan) {
+        ReqForVerifyMember reqForVerifyMember = new ReqForVerifyMember();
+        reqForVerifyMember.setMethod(getMethod);
+        reqForVerifyMember.setUrl(url);
+        reqForVerifyMember.setReferenceId(refreshMemberPlan);
+        logger.info("Request: Method={}, URL={}, ReferenceId={}", getMethod, url, refreshMemberPlan);
+        return reqForVerifyMember;
+    }
+
+    @Override
+    protected ResponseEntity<?> executeServiceCall(ShjCompositeReqForVerifyMember request, HttpHeaders headers, String transactionId) {
+        try {
+            String requestBody = objectMapper.writeValueAsString(request);
+            logger.info("Request Body: {}", requestBody);
+
+            HttpEntity<ShjCompositeReqForVerifyMember> entity = new HttpEntity<>(request, headers);
+            ResponseEntity<ShjCompositeResponseForVerifyMember> response =
+                    restTemplate.exchange(serviceUrl, HttpMethod.POST, entity, ShjCompositeResponseForVerifyMember.class);
+
+            String responseBody = objectMapper.writeValueAsString(response.getBody());
+            logger.info("Response Body: {}", responseBody);
+            return processVerifyResponse(response,headers, transactionId);
+        } catch (HttpClientErrorException e) {
+            logger.error("Client error calling SHJ service: {}", e.getMessage(), e);
+            return ResponseEntity.status(e.getStatusCode()).body(e.getResponseBodyAsString());
+        } catch (HttpServerErrorException e) {
+            logger.error("Server error calling SHJ service: {}", e.getMessage(), e);
+            return ResponseEntity.status(e.getStatusCode()).body(e.getResponseBodyAsString());
+        } catch (Exception e) {
+            logger.error("Unexpected error calling SHJ service: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Unexpected error: " + e.getMessage());
+        }
+    }
+
+    private ResponseEntity<?> processVerifyResponse(ResponseEntity<ShjCompositeResponseForVerifyMember> response,
+                                                    HttpHeaders headers, String transactionId) {
+        if (response.getBody() == null) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Response body is null from SHJ Service");
+        }
+
+        Map<String, Object> responseMapOk = new HashMap<>();
+        Map<String, Object> responseMapError = new HashMap<>();
+        boolean hasError = false;
+
+        if (response.getBody().getCompositeResponse() != null) {
+            for (ShjCompositeResponseForVerifyMember.CompositeResponse compositeResponse :
+                    response.getBody().getCompositeResponse()) {
+
+                if (compositeResponse.getBody() != null &&
+                        compositeResponse.getBody().getErrors() != null &&
+                        !compositeResponse.getBody().getErrors().isEmpty()) {
+                    // Handle error response
+                    responseMapError.put(compositeResponse.getReferenceId() + "_error",
+                            compositeResponse.getBody().getErrors());
+                    responseMapError.put("httpStatusCode", compositeResponse.getHttpStatusCode());
+                    responseMapError.put("transactionId", transactionId);
+                    hasError = true;
+                } else if (compositeResponse.getBody() != null) {
+                    // Handle success response
+                    ShjCompositeResponseForVerifyMember.Body body = compositeResponse.getBody();
+                    if (body.getRecords() != null && !body.getRecords().isEmpty()
+                            && body.getTotalSize() > 0) {
+                        responseMapOk.put(compositeResponse.getReferenceId() + "_Verify_Member_Service_",
+                                body.getRecords().get(0).getId());
+                        responseMapOk.put("totalCount", body.getTotalSize());
+
+                    } else if(compositeResponse.getHttpStatusCode() == 200
+                            && body.getTotalSize() == 0) {
+                        responseMapOk.put(compositeResponse.getReferenceId() + "_Verify_Member_Service_",
+                                "No records found");
+                        responseMapOk.put("totalCount", body.getTotalSize());
+                    }
+                }
+                if (hasError) {
+                    logger.error("Error in SHJ Service response: {}", compositeResponse.getBody().getErrors());
+                    return ResponseEntity.badRequest().body(responseMapError);
+                }
+            }
+            return ResponseEntity.ok(responseMapOk);
+        } else {
+            logger.error("No composite response found in SHJ Service response");
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("No composite response found in SHJ Service response");
+        }
+    }
+
+    private String encodeId(String id) {
+
+        return id.replace("+", "%2B");
+    }
+
+
+}
+=================================================================
+
+ShjFileProcessor
+-------------------
+
+package com.aetna.clinical.common.util;
+
+import com.aetna.clinical.common.util.MembersHelper;
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest;
+import com.aetna.clinical.common.dto.verifymember.ShjCompositeResponseForVerifyMember;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.hibernate.service.spi.ServiceException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Component;
+import org.springframework.web.multipart.MultipartFile;
+import com.aetna.clinical.common.service.*;
+import com.aetna.clinical.common.dto.response.OdmResponse;
+
+import java.io.IOException;
+import java.util.Map;
+import java.util.UUID;
+
+@Component
+public class ShjFileProcessor {
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    @Autowired
+    private TaskProcessor taskProcessor;
+
+    @Autowired
+    private VerifyMemberProcessor verifyMemberProcessor;
+    @Autowired
+    private CaseProcessor caseProcessor;
+    @Autowired
+    private  OdmService odmService;
+    @Autowired
+    private  PayloadTransformer payloadTransformer;
+    @Autowired
+    private MembersHelper memberHelper;
+    @Autowired
+    private  FoundationModelService foundationModelService;
+
+    private static final Logger logger = LoggerFactory.getLogger(ShjFileProcessor.class);
+
+
+
+    public ResponseEntity<?> processFile(MultipartFile file, String apiUrl, String foundationModelUrl) {
+        String transactionId = UUID.randomUUID().toString();
+        HttpHeaders headers = memberHelper.buildHttpHeader();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        try {
+            String payload = new String(file.getBytes());
+            ShjRequest request = objectMapper.readValue(file.getBytes(), ShjRequest.class);
+            Map<String, Object> transformedPayload = payloadTransformer.transformPayload(request, transactionId);
+
+            ResponseEntity<OdmResponse> odmResponse = odmService.callOdmService(
+                    apiUrl,
+                    objectMapper.writeValueAsString(transformedPayload),
+                    transactionId,
+                    headers
+            );
+
+            if (odmResponse.getBody() == null) {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                        .body("ODM service returned null response");
+            }
+
+            String caseAction = request.getShj().get(0).getShjMember().getShjCase().getCaseAction();
+            boolean shouldCreateTask = odmResponse.getBody().getOpportunityResponseDetails()
+                    .getShjOpportunityDetails()
+                    .getCreateTask();
+
+            boolean shouldCreateCase = odmResponse.getBody().getOpportunityResponseDetails()
+                    .getShjOpportunityDetails()
+                    .getCreateCase();
+
+            String cmmId = request.getShj().get(0).getShjMember().getMemberIdentifier().getMembershipId();
+            String proxyId = request.getShj().get(0).getShjMember().getMemberIdentifier().getProxyId();
+
+            if ("update".equalsIgnoreCase(caseAction) && shouldCreateTask) {
+                return taskProcessor.process(payload, transactionId, headers);
+            } else if ("new".equalsIgnoreCase(caseAction) && shouldCreateCase) {
+                ResponseEntity<?> verifyResponse = verifyMemberProcessor.process(payload, transactionId, headers);
+                if (verifyResponse.getStatusCode().is2xxSuccessful()) {
+                    Map<String, Object> verifyResponseBody = (Map<String, Object>) verifyResponse.getBody();
+                    verifyResponseBody.put("transactionId", transactionId);
+                    int totalCount = (int) verifyResponseBody.get("totalCount");
+                    if (totalCount > 0) {
+                        ResponseEntity<?> caseResponse = caseProcessor.process(payload, transactionId, headers);
+                        logger.info("Case response: {}", caseResponse.getStatusCode());
+                        return handleCaseResponse(caseResponse, verifyResponseBody);
+                    } else {
+                        ResponseEntity<?> fonResponse = foundationModelService.runService(cmmId, proxyId, foundationModelUrl, transactionId);
+                        if (fonResponse.getStatusCode().is2xxSuccessful()) {
+                            Map<String, Object> fonResponseBody = (Map<String, Object>) fonResponse.getBody();
+                            verifyResponseBody.putAll(fonResponseBody);
+                            ResponseEntity<?> caseResponse = caseProcessor.process(payload, transactionId, headers);
+                            logger.info("Case response: {}", caseResponse.getStatusCode());
+                            return handleCaseResponse(caseResponse, verifyResponseBody);
+                        }
+                        if(fonResponse.getStatusCode() == HttpStatus.BAD_REQUEST) {
+                            verifyResponseBody.remove("totalCount");
+                            verifyResponseBody.put("Foundational model Service", fonResponse.getBody());
+                            verifyResponseBody.put("status", fonResponse.getStatusCode());
+                            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(verifyResponseBody);
+                        }
+                        if(fonResponse.getStatusCode() == HttpStatus.INTERNAL_SERVER_ERROR) {
+                            verifyResponseBody.remove("totalCount");
+                            verifyResponseBody.put("Foundational model Service", fonResponse.getBody());
+                            verifyResponseBody.put("status", fonResponse.getStatusCode());
+                            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(verifyResponseBody);
+                        }
+                        /*else {
+                            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                                    .body("Foundation Model Service call failed");
+                        }*/
+                    }
+                    verifyResponseBody.remove("totalCount");
+                    verifyResponse.getBody();
+                    return verifyResponse;
+                }
+            } else {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body("Invalid case action or task creation flag");
+            }
+
+        } catch (IOException e) {
+            Map<String, String> map = Map.of("Error", "Error reading file: " + e.getMessage(),
+                    "transactionId", transactionId ,
+                    "status", "Failed");
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(map);
+        } catch (ServiceException e) {
+            Map<String, String> map = Map.of("Error", "Error reading file: " + e.getMessage(),
+                    "transactionId", transactionId ,
+                    "status", "Failed");
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(map);
+        } catch (Exception e) {
+            throw new RuntimeException("Processing failed: " + e.getMessage(), e);
+        }
+        return ResponseEntity.ok("Processing completed successfully");
+    }
+
+    private ResponseEntity<?> handleCaseResponse(ResponseEntity<?> caseResponse, Map<String, Object> verifyResponseBody) {
+        if (caseResponse.getStatusCode() == HttpStatus.OK) {
+            verifyResponseBody.put("caseResponse", caseResponse.getBody());
+            verifyResponseBody.put("status", caseResponse.getStatusCode());
+            verifyResponseBody.remove("totalCount");
+            return ResponseEntity.ok(verifyResponseBody);
+        }
+        if (caseResponse.getStatusCode() == HttpStatus.BAD_REQUEST) {
+            verifyResponseBody.put("caseResponse", caseResponse.getBody());
+            verifyResponseBody.put("status", caseResponse.getStatusCode());
+            verifyResponseBody.remove("totalCount");
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(verifyResponseBody);
+        }
+        if (caseResponse.getStatusCode() == HttpStatus.INTERNAL_SERVER_ERROR) {
+            verifyResponseBody.put("caseResponse", caseResponse.getBody());
+            verifyResponseBody.put("status", caseResponse.getStatusCode());
+            verifyResponseBody.remove("totalCount");
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(verifyResponseBody);
+        }
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Unexpected case response status");
+    }
+
+}
+=============================================
+
+
+
+
+
