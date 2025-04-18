@@ -1,0 +1,135 @@
+package com.aetna.clinical.common.service;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+import com.aetna.clinical.common.dto.task.ShjCompositeReqForTask;
+import com.aetna.clinical.common.dto.task.ShjCompositeResponseForTask;
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest;
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest.*;
+import com.aetna.clinical.common.exceptions.ServiceException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.*;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.*;
+
+@ExtendWith(MockitoExtension.class)
+class TaskProcessorTest {
+
+    @Mock
+    private RestTemplate restTemplate;
+
+    @Mock
+    private ObjectMapper objectMapper;
+
+    @InjectMocks
+    private TaskProcessor taskProcessor;
+
+    private ShjRequest shjRequest;
+    private final String transactionId = "test-transaction-id";
+
+    @BeforeEach
+    void setUp() {
+        taskProcessor = new TaskProcessor(objectMapper, restTemplate);
+        taskProcessor.serviceUrl = "http://test-service-url";
+
+        MemberIdentifier memberIdentifier = new MemberIdentifier();
+        memberIdentifier.setMembershipId("test-membership-id");
+        memberIdentifier.setProxyId("test-proxy-id");
+
+        CareManagementStaffer staffer = new CareManagementStaffer();
+        staffer.setAssignedUserId("test-user-id");
+
+        ShjTask shjTask = new ShjTask();
+        shjTask.setCareManagementStaffer(staffer);
+        shjTask.setStatus("Open");
+        shjTask.setPriority("High");
+        shjTask.setComments("Test comments");
+        shjTask.setDueDate("2023-01-01");
+        shjTask.setSubject("Test subject");
+
+        ShjCase shjCase = new ShjCase();
+        shjCase.setCaseAction("update");
+        shjCase.setShjID("test-shj-id");
+        shjCase.setShjTask(shjTask);
+
+        ShjMember shjMember = new ShjMember();
+        shjMember.setMemberIdentifier(memberIdentifier);
+        shjMember.setShjCase(shjCase);
+
+        Shj shj = new Shj();
+        shj.setShjMember(shjMember);
+
+        shjRequest = new ShjRequest();
+        shjRequest.setShj(Collections.singletonList(shj));
+    }
+
+    @Test
+    void validateRequest_ValidRequest_ShouldNotThrowException() {
+        assertDoesNotThrow(() -> taskProcessor.validateRequest(shjRequest, transactionId));
+    }
+
+    @Test
+    void validateRequest_InvalidCaseAction_ShouldThrowException() {
+        shjRequest.getShj().get(0).getShjMember().getShjCase().setCaseAction("invalid");
+        assertThrows(ValidationException.class, 
+            () -> taskProcessor.validateRequest(shjRequest, transactionId));
+    }
+
+    @Test
+    void validateRequest_MissingTaskInfo_ShouldThrowException() {
+        shjRequest.getShj().get(0).getShjMember().getShjCase().setShjTask(null);
+        assertThrows(ValidationException.class, 
+            () -> taskProcessor.validateRequest(shjRequest, transactionId));
+    }
+
+    @Test
+    void buildServiceRequest_ValidRequest_ShouldReturnCompositeRequest() {
+        ShjCompositeReqForTask result = taskProcessor.buildServiceRequest(shjRequest, transactionId);
+        assertNotNull(result);
+        assertEquals(5, result.getCompositeRequest().size());
+    }
+
+    @Test
+    void executeServiceCall_SuccessfulResponse_ShouldReturnOk() throws Exception {
+        ShjCompositeResponseForTask mockResponse = new ShjCompositeResponseForTask();
+        ShjCompositeResponseForTask.CompositeResponse responseItem = new ShjCompositeResponseForTask.CompositeResponse();
+        responseItem.setHttpStatusCode(200);
+        mockResponse.setCompositeResponse(Collections.singletonList(responseItem));
+
+        when(restTemplate.exchange(
+            anyString(), 
+            eq(HttpMethod.POST), 
+            any(HttpEntity.class), 
+            eq(ShjCompositeResponseForTask.class)))
+            .thenReturn(new ResponseEntity<>(mockResponse, HttpStatus.OK));
+
+        ResponseEntity<?> response = taskProcessor.executeServiceCall(
+            new ShjCompositeReqForTask(), new HttpHeaders(), transactionId);
+        
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+    }
+
+    @Test
+    void processTaskResponse_ErrorResponse_ShouldReturnBadRequest() {
+        ShjCompositeResponseForTask mockResponse = new ShjCompositeResponseForTask();
+        ShjCompositeResponseForTask.CompositeResponse responseItem = new ShjCompositeResponseForTask.CompositeResponse();
+        responseItem.setHttpStatusCode(400);
+        responseItem.setErrors(Collections.singletonList("Test error"));
+        mockResponse.setCompositeResponse(Collections.singletonList(responseItem));
+
+        ResponseEntity<ShjCompositeResponseForTask> responseEntity = 
+            new ResponseEntity<>(mockResponse, HttpStatus.OK);
+
+        ResponseEntity<?> result = taskProcessor.processTaskResponse(responseEntity, transactionId);
+        assertEquals(HttpStatus.BAD_REQUEST, result.getStatusCode());
+    }
+}
