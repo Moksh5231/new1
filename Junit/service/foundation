@@ -1,0 +1,96 @@
+package com.aetna.clinical.common.service;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+import com.aetna.clinical.common.dto.response.FoundationalModelResponse;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.*;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.Map;
+
+@ExtendWith(MockitoExtension.class)
+class FoundationModelServiceTest {
+
+    @Mock
+    private RestTemplate restTemplate;
+
+    @InjectMocks
+    private FoundationModelService foundationModelService;
+
+    private final String cmmId = "test-cmm-id";
+    private final String proxyId = "test-proxy-id";
+    private final String url = "http://test-service-url";
+    private final String transactionId = "test-transaction-id";
+
+    @Test
+    void runService_SuccessfulResponse_ShouldReturnOk() {
+        FoundationalModelResponse mockResponse = new FoundationalModelResponse();
+        mockResponse.setResponseCode(200);
+        mockResponse.setReferenceIds(new FoundationalModelResponse.ReferenceIds());
+
+        when(restTemplate.exchange(
+            eq(url),
+            eq(HttpMethod.POST),
+            any(HttpEntity.class),
+            eq(FoundationalModelResponse.class)))
+            .thenReturn(new ResponseEntity<>(mockResponse, HttpStatus.OK));
+
+        ResponseEntity<?> response = foundationModelService.runService(cmmId, proxyId, url, transactionId);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+    }
+
+    @Test
+    void runService_BadRequestResponse_ShouldReturnBadRequest() {
+        FoundationalModelResponse mockResponse = new FoundationalModelResponse();
+        mockResponse.setResponseCode(400);
+        mockResponse.setResponseMsg("Bad Request");
+
+        when(restTemplate.exchange(
+            eq(url),
+            eq(HttpMethod.POST),
+            any(HttpEntity.class),
+            eq(FoundationalModelResponse.class)))
+            .thenReturn(new ResponseEntity<>(mockResponse, HttpStatus.OK));
+
+        ResponseEntity<?> response = foundationModelService.runService(cmmId, proxyId, url, transactionId);
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+    }
+
+    @Test
+    void runService_ServerErrorResponse_ShouldReturnInternalServerError() {
+        FoundationalModelResponse mockResponse = new FoundationalModelResponse();
+        mockResponse.setResponseCode(500);
+        mockResponse.setResponseMsg("Server Error");
+
+        when(restTemplate.exchange(
+            eq(url),
+            eq(HttpMethod.POST),
+            any(HttpEntity.class),
+            eq(FoundationalModelResponse.class)))
+            .thenReturn(new ResponseEntity<>(mockResponse, HttpStatus.OK));
+
+        ResponseEntity<?> response = foundationModelService.runService(cmmId, proxyId, url, transactionId);
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
+    }
+
+    @Test
+    void runService_Exception_ShouldReturnInternalServerError() {
+        when(restTemplate.exchange(
+            eq(url),
+            eq(HttpMethod.POST),
+            any(HttpEntity.class),
+            eq(FoundationalModelResponse.class)))
+            .thenThrow(new RuntimeException("Test Exception"));
+
+        ResponseEntity<?> response = foundationModelService.runService(cmmId, proxyId, url, transactionId);
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
+    }
+}
