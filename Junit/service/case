@@ -1,0 +1,179 @@
+package com.aetna.clinical.common.service;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+import com.aetna.clinical.common.dto.csr.ReqForCase;
+import com.aetna.clinical.common.dto.csr.ShjCompositeReqForCase;
+import com.aetna.clinical.common.dto.csr.ShjCompositeResponseForCase;
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest;
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest.Shj;
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest.ShjCase;
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest.ShjMember;
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest.ShjTask;
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest.MemberIdentifier;
+import com.aetna.clinical.common.exceptions.ServiceException;
+import com.aetna.clinical.common.util.CaseConstants;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.*;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.*;
+
+@ExtendWith(MockitoExtension.class)
+class CaseProcessorTest {
+
+    @Mock
+    private RestTemplate restTemplate;
+
+    @Mock
+    private ObjectMapper objectMapper;
+
+    @InjectMocks
+    private CaseProcessor caseProcessor;
+
+    private ShjRequest shjRequest;
+    private ShjCompositeReqForCase compositeRequest;
+    private ShjCompositeResponseForCase compositeResponse;
+    private final String transactionId = "test-transaction-id";
+
+    @BeforeEach
+    void setUp() {
+        caseProcessor = new CaseProcessor(objectMapper, restTemplate);
+        caseProcessor.serviceUrl = "http://test-service-url";
+
+        MemberIdentifier memberIdentifier = new MemberIdentifier();
+        memberIdentifier.setMembershipId("test-membership-id");
+        memberIdentifier.setProxyId("test-proxy-id");
+
+        ShjTask shjTask = new ShjTask();
+        shjTask.setStatus("Open");
+        shjTask.setPriority("High");
+
+        ShjCase shjCase = new ShjCase();
+        shjCase.setCaseAction("new");
+        shjCase.setShjID("test-shj-id");
+        shjCase.setShjTask(shjTask);
+
+        ShjMember shjMember = new ShjMember();
+        shjMember.setMemberIdentifier(memberIdentifier);
+        shjMember.setShjCase(shjCase);
+
+        Shj shj = new Shj();
+        shj.setShjMember(shjMember);
+
+        shjRequest = new ShjRequest();
+        shjRequest.setShj(Collections.singletonList(shj));
+
+        compositeRequest = new ShjCompositeReqForCase();
+        compositeRequest.setCompositeRequest(new ArrayList<>());
+
+        compositeResponse = new ShjCompositeResponseForCase();
+        ShjCompositeResponseForCase.CompositeResponse responseItem = new ShjCompositeResponseForCase.CompositeResponse();
+        responseItem.setHttpStatusCode(200);
+        responseItem.setReferenceId("test-ref-id");
+        compositeResponse.setCompositeResponse(Collections.singletonList(responseItem));
+    }
+
+    @Test
+    void validateRequest_ValidRequest_ShouldNotThrowException() {
+        assertDoesNotThrow(() -> caseProcessor.validateRequest(shjRequest, transactionId));
+    }
+
+    @Test
+    void validateRequest_InvalidCaseAction_ShouldThrowException() {
+        shjRequest.getShj().get(0).getShjMember().getShjCase().setCaseAction("invalid");
+        assertThrows(ValidationException.class, 
+            () -> caseProcessor.validateRequest(shjRequest, transactionId));
+    }
+
+    @Test
+    void validateRequest_MissingMemberIdentifier_ShouldThrowException() {
+        shjRequest.getShj().get(0).getShjMember().setMemberIdentifier(null);
+        assertThrows(ValidationException.class, 
+            () -> caseProcessor.validateRequest(shjRequest, transactionId));
+    }
+
+    @Test
+    void validateRequest_MissingMembershipId_ShouldThrowException() {
+        shjRequest.getShj().get(0).getShjMember().getMemberIdentifier().setMembershipId(null);
+        assertThrows(ValidationException.class, 
+            () -> caseProcessor.validateRequest(shjRequest, transactionId));
+    }
+
+    @Test
+    void validateRequest_MissingShjCase_ShouldThrowException() {
+        shjRequest.getShj().get(0).getShjMember().setShjCase(null);
+        assertThrows(ValidationException.class, 
+            () -> caseProcessor.validateRequest(shjRequest, transactionId));
+    }
+
+    @Test
+    void buildServiceRequest_ValidRequest_ShouldReturnCompositeRequest() {
+        ShjCompositeReqForCase result = caseProcessor.buildServiceRequest(shjRequest, transactionId);
+        assertNotNull(result);
+        assertEquals(5, result.getCompositeRequest().size());
+    }
+
+    @Test
+    void buildServiceRequest_EmptyShjList_ShouldThrowException() {
+        shjRequest.setShj(Collections.emptyList());
+        assertThrows(ValidationException.class, 
+            () -> caseProcessor.buildServiceRequest(shjRequest, transactionId));
+    }
+
+    @Test
+    void executeServiceCall_SuccessfulResponse_ShouldReturnOk() throws Exception {
+        HttpHeaders headers = new HttpHeaders();
+        when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(HttpEntity.class), 
+            eq(ShjCompositeResponseForCase.class)))
+            .thenReturn(new ResponseEntity<>(compositeResponse, HttpStatus.OK));
+
+        ResponseEntity<?> response = caseProcessor.executeServiceCall(compositeRequest, headers, transactionId);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+    }
+
+    @Test
+    void executeServiceCall_ServerError_ShouldThrowServiceException() {
+        HttpHeaders headers = new HttpHeaders();
+        when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(HttpEntity.class), 
+            eq(ShjCompositeResponseForCase.class)))
+            .thenThrow(new HttpServerErrorException(HttpStatus.INTERNAL_SERVER_ERROR));
+
+        assertThrows(ServiceException.class, 
+            () -> caseProcessor.executeServiceCall(compositeRequest, headers, transactionId));
+    }
+
+    @Test
+    void processCaseResponse_EmptyResponse_ShouldThrowServiceException() {
+        ResponseEntity<ShjCompositeResponseForCase> responseEntity = 
+            new ResponseEntity<>(null, HttpStatus.OK);
+        assertThrows(ServiceException.class, 
+            () -> caseProcessor.processCaseResponse(responseEntity, transactionId));
+    }
+
+    @Test
+    void processCaseResponse_ErrorStatusCode_ShouldThrowServiceException() {
+        compositeResponse.getCompositeResponse().get(0).setHttpStatusCode(500);
+        ResponseEntity<ShjCompositeResponseForCase> responseEntity = 
+            new ResponseEntity<>(compositeResponse, HttpStatus.OK);
+        assertThrows(ServiceException.class, 
+            () -> caseProcessor.processCaseResponse(responseEntity, transactionId));
+    }
+
+    @Test
+    void processCaseResponse_BadRequest_ShouldReturnBadRequest() {
+        compositeResponse.getCompositeResponse().get(0).setHttpStatusCode(400);
+        ResponseEntity<ShjCompositeResponseForCase> responseEntity = 
+            new ResponseEntity<>(compositeResponse, HttpStatus.OK);
+        ResponseEntity<?> result = caseProcessor.processCaseResponse(responseEntity, transactionId);
+        assertEquals(400, result.getStatusCodeValue());
+    }
+}
