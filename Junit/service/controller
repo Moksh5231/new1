@@ -1,0 +1,55 @@
+package com.aetna.clinical.controller;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+import com.aetna.clinical.common.util.ShjFileProcessor;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.multipart.MultipartFile;
+
+@ExtendWith(MockitoExtension.class)
+class ShjOpportunityControllerTest {
+
+    @Mock
+    private ShjFileProcessor shjFileProcessor;
+
+    @Mock
+    private MembersHelper memberHelper;
+
+    @Mock
+    private MultipartFile file;
+
+    @InjectMocks
+    private ShjOpportunityController shjOpportunityController;
+
+    @BeforeEach
+    void setUp() {
+        shjOpportunityController.apiUrl = "http://test-api-url";
+        shjOpportunityController.foundationModelUrl = "http://test-foundation-url";
+    }
+
+    @Test
+    void processShjFile_SuccessfulProcessing_ShouldReturnOk() throws Exception {
+        when(shjFileProcessor.processFile(any(), anyString(), anyString()))
+            .thenReturn(ResponseEntity.ok().build());
+
+        ResponseEntity<?> response = shjOpportunityController.processShjFile(file);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+    }
+
+    @Test
+    void processShjFile_IOException_ShouldReturnInternalServerError() throws Exception {
+        when(file.getBytes()).thenThrow(new Exception("Test Exception"));
+
+        ResponseEntity<?> response = shjOpportunityController.processShjFile(file);
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
+    }
+}
