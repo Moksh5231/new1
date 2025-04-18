@@ -1,0 +1,82 @@
+package com.aetna.clinical.common.service;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+import com.aetna.clinical.common.dto.response.OdmResponse;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.*;
+
+@ExtendWith(MockitoExtension.class)
+class OdmServiceTest {
+
+    @Mock
+    private RestTemplate restTemplate;
+
+    @InjectMocks
+    private OdmService odmService;
+
+    private final String apiUrl = "http://test-api-url";
+    private final String requestBody = "test-request-body";
+    private final String transactionId = "test-transaction-id";
+    private HttpHeaders headers;
+
+    @BeforeEach
+    void setUp() {
+        headers = new HttpHeaders();
+    }
+
+    @Test
+    void callOdmService_SuccessfulResponse_ShouldReturnResponse() throws Exception {
+        OdmResponse mockResponse = new OdmResponse();
+        
+        when(restTemplate.exchange(
+            eq(apiUrl),
+            eq(HttpMethod.POST),
+            any(HttpEntity.class),
+            eq(OdmResponse.class)))
+            .thenReturn(new ResponseEntity<>(mockResponse, HttpStatus.OK));
+
+        ResponseEntity<OdmResponse> response = 
+            odmService.callOdmService(apiUrl, requestBody, transactionId, headers);
+        
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNotNull(response.getBody());
+    }
+
+    @Test
+    void callOdmService_ServiceException_ShouldReturnBadRequest() throws Exception {
+        when(restTemplate.exchange(
+            eq(apiUrl),
+            eq(HttpMethod.POST),
+            any(HttpEntity.class),
+            eq(OdmResponse.class)))
+            .thenThrow(new ServiceException("Test Exception"));
+
+        ResponseEntity<OdmResponse> response = 
+            odmService.callOdmService(apiUrl, requestBody, transactionId, headers);
+        
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+    }
+
+    @Test
+    void callOdmService_GenericException_ShouldReturnInternalServerError() throws Exception {
+        when(restTemplate.exchange(
+            eq(apiUrl),
+            eq(HttpMethod.POST),
+            any(HttpEntity.class),
+            eq(OdmResponse.class)))
+            .thenThrow(new RuntimeException("Test Exception"));
+
+        ResponseEntity<OdmResponse> response = 
+            odmService.callOdmService(apiUrl, requestBody, transactionId, headers);
+        
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
+    }
+}
