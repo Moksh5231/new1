@@ -1,0 +1,160 @@
+package com.aetna.clinical.common.util;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+import com.aetna.clinical.common.dto.response.OdmResponse;
+import com.aetna.clinical.common.dto.response.OdmResponse.OpportunityResponseDetails;
+import com.aetna.clinical.common.dto.response.OdmResponse.ShjOpportunityDetails;
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest;
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest.*;
+import com.aetna.clinical.common.exceptions.ServiceException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.*;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.IOException;
+import java.util.*;
+
+@ExtendWith(MockitoExtension.class)
+class ShjFileProcessorTest {
+
+    @Mock
+    private ObjectMapper objectMapper;
+
+    @Mock
+    private TaskProcessor taskProcessor;
+
+    @Mock
+    private VerifyMemberProcessor verifyMemberProcessor;
+
+    @Mock
+    private CaseProcessor caseProcessor;
+
+    @Mock
+    private OdmService odmService;
+
+    @Mock
+    private PayloadTransformer payloadTransformer;
+
+    @Mock
+    private MembersHelper memberHelper;
+
+    @Mock
+    private FoundationModelService foundationModelService;
+
+    @Mock
+    private MultipartFile file;
+
+    @InjectMocks
+    private ShjFileProcessor shjFileProcessor;
+
+    private ShjRequest shjRequest;
+    private final String apiUrl = "http://test-api-url";
+    private final String foundationModelUrl = "http://test-foundation-url";
+    private final String transactionId = "test-transaction-id";
+
+    @BeforeEach
+    void setUp() throws IOException {
+        MemberIdentifier memberIdentifier = new MemberIdentifier();
+        memberIdentifier.setMembershipId("test-membership-id");
+        memberIdentifier.setProxyId("test-proxy-id");
+
+        ShjCase shjCase = new ShjCase();
+        shjCase.setCaseAction("new");
+        shjCase.setShjID("test-shj-id");
+
+        ShjMember shjMember = new ShjMember();
+        shjMember.setMemberIdentifier(memberIdentifier);
+        shjMember.setShjCase(shjCase);
+
+        Shj shj = new Shj();
+        shj.setShjMember(shjMember);
+
+        shjRequest = new ShjRequest();
+        shjRequest.setShj(Collections.singletonList(shj));
+
+        when(file.getBytes()).thenReturn("test-content".getBytes());
+        when(objectMapper.readValue(any(byte[].class), eq(ShjRequest.class))).thenReturn(shjRequest);
+        when(memberHelper.buildHttpHeader()).thenReturn(new HttpHeaders());
+
+        OdmResponse odmResponse = new OdmResponse();
+        OpportunityResponseDetails opportunityDetails = new OpportunityResponseDetails();
+        ShjOpportunityDetails shjOpportunityDetails = new ShjOpportunityDetails();
+        shjOpportunityDetails.setCreateCase(true);
+        opportunityDetails.setShjOpportunityDetails(shjOpportunityDetails);
+        odmResponse.setOpportunityResponseDetails(opportunityDetails);
+
+        when(odmService.callOdmService(
+            anyString(), 
+            anyString(), 
+            anyString(), 
+            any(HttpHeaders.class)))
+            .thenReturn(new ResponseEntity<>(odmResponse, HttpStatus.OK));
+    }
+
+    @Test
+    void processFile_NewCaseWithCreateCaseTrue_ShouldCallVerifyMemberAndCaseProcessors() throws Exception {
+        Map<String, Object> verifyResponse = new HashMap<>();
+        verifyResponse.put("totalCount", 1);
+        
+        when(verifyMemberProcessor.process(anyString(), anyString(), any(HttpHeaders.class)))
+            .thenReturn(ResponseEntity.ok(verifyResponse));
+        when(caseProcessor.process(anyString(), anyString(), any(HttpHeaders.class)))
+            .thenReturn(ResponseEntity.ok().build());
+
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, apiUrl, foundationModelUrl);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+    }
+
+    @Test
+    void processFile_IOException_ShouldReturnBadRequest() throws Exception {
+        when(file.getBytes()).thenThrow(new IOException("Test IO Exception"));
+        
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, apiUrl, foundationModelUrl);
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+    }
+
+    @Test
+    void processFile_UpdateCaseWithCreateTaskTrue_ShouldCallTaskProcessor() throws Exception {
+        shjRequest.getShj().get(0).getShjMember().getShjCase().setCaseAction("update");
+        
+        OdmResponse odmResponse = new OdmResponse();
+        OpportunityResponseDetails opportunityDetails = new OpportunityResponseDetails();
+        ShjOpportunityDetails shjOpportunityDetails = new ShjOpportunityDetails();
+        shjOpportunityDetails.setCreateTask(true);
+        opportunityDetails.setShjOpportunityDetails(shjOpportunityDetails);
+        odmResponse.setOpportunityResponseDetails(opportunityDetails);
+
+        when(odmService.callOdmService(
+            anyString(), 
+            anyString(), 
+            anyString(), 
+            any(HttpHeaders.class)))
+            .thenReturn(new ResponseEntity<>(odmResponse, HttpStatus.OK));
+        
+        when(taskProcessor.process(anyString(), anyString(), any(HttpHeaders.class)))
+            .thenReturn(ResponseEntity.ok().build());
+
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, apiUrl, foundationModelUrl);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+    }
+
+    @Test
+    void handleCaseResponse_OkStatus_ShouldReturnOk() {
+        Map<String, Object> verifyResponse = new HashMap<>();
+        verifyResponse.put("totalCount", 1);
+        
+        ResponseEntity<?> caseResponse = ResponseEntity.ok().build();
+        ResponseEntity<?> result = shjFileProcessor.handleCaseResponse(caseResponse, verifyResponse);
+        
+        assertEquals(HttpStatus.OK, result.getStatusCode());
+    }
+}
