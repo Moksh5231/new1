@@ -1,0 +1,122 @@
+package com.aetna.clinical.common.service;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest;
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest.*;
+import com.aetna.clinical.common.dto.verifymember.ShjCompositeReqForVerifyMember;
+import com.aetna.clinical.common.dto.verifymember.ShjCompositeResponseForVerifyMember;
+import com.aetna.clinical.common.exceptions.ServiceException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.*;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.Collections;
+
+@ExtendWith(MockitoExtension.class)
+class VerifyMemberProcessorTest {
+
+    @Mock
+    private RestTemplate restTemplate;
+
+    @Mock
+    private ObjectMapper objectMapper;
+
+    @InjectMocks
+    private VerifyMemberProcessor verifyMemberProcessor;
+
+    private ShjRequest shjRequest;
+    private final String transactionId = "test-transaction-id";
+
+    @BeforeEach
+    void setUp() {
+        verifyMemberProcessor = new VerifyMemberProcessor(objectMapper, restTemplate);
+        verifyMemberProcessor.serviceUrl = "http://test-service-url";
+
+        MemberIdentifier memberIdentifier = new MemberIdentifier();
+        memberIdentifier.setMembershipId("test-membership-id");
+        memberIdentifier.setProxyId("test-proxy-id");
+
+        ShjCase shjCase = new ShjCase();
+        shjCase.setCaseAction("new");
+        shjCase.setShjID("test-shj-id");
+
+        ShjMember shjMember = new ShjMember();
+        shjMember.setMemberIdentifier(memberIdentifier);
+        shjMember.setShjCase(shjCase);
+
+        Shj shj = new Shj();
+        shj.setShjMember(shjMember);
+
+        shjRequest = new ShjRequest();
+        shjRequest.setShj(Collections.singletonList(shj));
+    }
+
+    @Test
+    void validateRequest_ValidRequest_ShouldNotThrowException() {
+        assertDoesNotThrow(() -> verifyMemberProcessor.validateRequest(shjRequest, transactionId));
+    }
+
+    @Test
+    void validateRequest_InvalidCaseAction_ShouldThrowException() {
+        shjRequest.getShj().get(0).getShjMember().getShjCase().setCaseAction("invalid");
+        assertThrows(ValidationException.class, 
+            () -> verifyMemberProcessor.validateRequest(shjRequest, transactionId));
+    }
+
+    @Test
+    void buildServiceRequest_ValidRequest_ShouldReturnCompositeRequest() {
+        ShjCompositeReqForVerifyMember result = 
+            verifyMemberProcessor.buildServiceRequest(shjRequest, transactionId);
+        assertNotNull(result);
+        assertEquals(1, result.getCompositeRequest().size());
+    }
+
+    @Test
+    void executeServiceCall_SuccessfulResponse_ShouldReturnOk() throws Exception {
+        ShjCompositeResponseForVerifyMember mockResponse = new ShjCompositeResponseForVerifyMember();
+        ShjCompositeResponseForVerifyMember.CompositeResponse responseItem = 
+            new ShjCompositeResponseForVerifyMember.CompositeResponse();
+        responseItem.setHttpStatusCode(200);
+        mockResponse.setCompositeResponse(Collections.singletonList(responseItem));
+
+        when(restTemplate.exchange(
+            anyString(), 
+            eq(HttpMethod.POST), 
+            any(HttpEntity.class), 
+            eq(ShjCompositeResponseForVerifyMember.class)))
+            .thenReturn(new ResponseEntity<>(mockResponse, HttpStatus.OK));
+
+        ResponseEntity<?> response = verifyMemberProcessor.executeServiceCall(
+            new ShjCompositeReqForVerifyMember(), new HttpHeaders(), transactionId);
+        
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+    }
+
+    @Test
+    void processVerifyResponse_ErrorResponse_ShouldReturnBadRequest() {
+        ShjCompositeResponseForVerifyMember mockResponse = new ShjCompositeResponseForVerifyMember();
+        ShjCompositeResponseForVerifyMember.CompositeResponse responseItem = 
+            new ShjCompositeResponseForVerifyMember.CompositeResponse();
+        responseItem.setHttpStatusCode(400);
+        ShjCompositeResponseForVerifyMember.Body body = new ShjCompositeResponseForVerifyMember.Body();
+        body.setErrors(Collections.singletonList("Test error"));
+        responseItem.setBody(body);
+        mockResponse.setCompositeResponse(Collections.singletonList(responseItem));
+
+        ResponseEntity<ShjCompositeResponseForVerifyMember> responseEntity = 
+            new ResponseEntity<>(mockResponse, HttpStatus.OK);
+
+        ResponseEntity<?> result = verifyMemberProcessor.processVerifyResponse(
+            responseEntity, new HttpHeaders(), transactionId);
+        assertEquals(HttpStatus.BAD_REQUEST, result.getStatusCode());
+    }
+}
