@@ -1,0 +1,116 @@
+package com.aetna.clinical.common.service;
+
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest;
+import com.aetna.clinical.common.util.MembersHelper;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.validation.ValidationException;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class ShjRequestProcessorTest {
+
+    @Mock
+    private ObjectMapper objectMapper;
+    @Mock
+    private RestTemplate restTemplate;
+    @Mock
+    private MembersHelper membersHelper;
+
+    private TestShjRequestProcessor processor;
+
+    @BeforeEach
+    void setUp() {
+        processor = new TestShjRequestProcessor(objectMapper, restTemplate, membersHelper);
+    }
+
+    @Test
+    void process_ValidPayload_Success() throws JsonProcessingException {
+        String payload = "{}";
+        String transactionId = "123";
+        ShjRequest mockRequest = new ShjRequest();
+        
+        when(objectMapper.readValue(payload, ShjRequest.class)).thenReturn(mockRequest);
+        
+        ResponseEntity<?> response = processor.process(payload, transactionId);
+        
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        verify(objectMapper).readValue(payload, ShjRequest.class);
+    }
+
+    @Test
+    void process_InvalidPayload_ValidationException() throws JsonProcessingException {
+        String payload = "{}";
+        String transactionId = "123";
+        ShjRequest mockRequest = new ShjRequest();
+        
+        when(objectMapper.readValue(payload, ShjRequest.class)).thenReturn(mockRequest);
+        doThrow(new ValidationException("Invalid")).when(processor).validateRequest(any(), anyString());
+        
+        ResponseEntity<?> response = processor.process(payload, transactionId);
+        
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertTrue(response.getBody() instanceof Map);
+    }
+
+    @Test
+    void process_JsonProcessingException() throws JsonProcessingException {
+        String payload = "invalid";
+        String transactionId = "123";
+        
+        when(objectMapper.readValue(payload, ShjRequest.class))
+            .thenThrow(new JsonProcessingException("Error") {});
+        
+        ResponseEntity<?> response = processor.process(payload, transactionId);
+        
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
+    }
+
+    @Test
+    void process_GenericException() throws JsonProcessingException {
+        String payload = "{}";
+        String transactionId = "123";
+        
+        when(objectMapper.readValue(payload, ShjRequest.class))
+            .thenThrow(new RuntimeException("Unexpected error"));
+        
+        ResponseEntity<?> response = processor.process(payload, transactionId);
+        
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
+    }
+
+    // Concrete test implementation
+    private static class TestShjRequestProcessor extends ShjRequestProcessor<String, String> {
+        public TestShjRequestProcessor(ObjectMapper objectMapper, RestTemplate restTemplate, MembersHelper memberHelper) {
+            super(objectMapper, restTemplate, memberHelper);
+        }
+
+        @Override
+        protected void validateRequest(ShjRequest request, String transactionId) {
+            // Test implementation
+        }
+
+        @Override
+        protected String buildServiceRequest(ShjRequest request, String transactionId) {
+            return "test";
+        }
+
+        @Override
+        protected ResponseEntity<?> executeServiceCall(String request, String transactionId) {
+            return ResponseEntity.ok().build();
+        }
+    }
+}
