@@ -1,175 +1,290 @@
 package com.aetna.clinical.common.util;
 
-import com.aetna.clinical.common.util.MembersHelper;
-import com.aetna.clinical.common.dto.taskrequest.ShjRequest;
-import com.aetna.clinical.common.dto.verifymember.ShjCompositeResponseForVerifyMember;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.hibernate.service.spi.ServiceException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
-import org.springframework.stereotype.Component;
-import org.springframework.web.multipart.MultipartFile;
-import com.aetna.clinical.common.service.*;
 import com.aetna.clinical.common.dto.response.OdmResponse;
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest;
+import com.aetna.clinical.common.exceptions.ServiceException;
+import com.aetna.clinical.common.service.*;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.*;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.util.Map;
 import java.util.UUID;
 
-@Component
-public class ShjFileProcessor {
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
-    @Autowired
+@ExtendWith(MockitoExtension.class)
+class ShjFileProcessorTest {
+
+    @Mock
     private ObjectMapper objectMapper;
-
-    @Autowired
+    @Mock
     private TaskProcessor taskProcessor;
-
-    @Autowired
+    @Mock
     private VerifyMemberProcessor verifyMemberProcessor;
-    @Autowired
+    @Mock
     private CaseProcessor caseProcessor;
-    @Autowired
-    private  OdmService odmService;
-    @Autowired
-    private  PayloadTransformer payloadTransformer;
+    @Mock
+    private OdmService odmService;
+    @Mock
+    private PayloadTransformer payloadTransformer;
+    @Mock
+    private FoundationModelService foundationModelService;
+    
+    @InjectMocks
+    private ShjFileProcessor shjFileProcessor;
 
-    @Autowired
-    private  FoundationModelService foundationModelService;
+    private final String testApiUrl = "http://test-odm-url.com";
+    private final String testFoundationUrl = "http://test-foundation-url.com";
+    private final String transactionId = UUID.randomUUID().toString();
+    private final String validJson = "{\"shj\":[{\"shjMember\":{\"memberIdentifier\":{\"membershipId\":\"123\",\"proxyId\":\"456\"},\"shjCase\":{\"caseAction\":\"new\",\"shjID\":\"789\"}}}]}";
 
-    private static final Logger logger = LoggerFactory.getLogger(ShjFileProcessor.class);
-
-
-
-    public ResponseEntity<?> processFile(MultipartFile file, String apiUrl, String foundationModelUrl) {
-        String transactionId = UUID.randomUUID().toString();
-        /*HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);*/
-
-        try {
-            String payload = new String(file.getBytes());
-            ShjRequest request = objectMapper.readValue(file.getBytes(), ShjRequest.class);
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            Map<String, Object> transformedPayload = payloadTransformer.transformPayload(request, transactionId);
-
-            ResponseEntity<OdmResponse> odmResponse = odmService.callOdmService(
-                    apiUrl,
-                    objectMapper.writeValueAsString(transformedPayload),
-                    transactionId,
-                    headers
-            );
-
-            System.out.println("ODM service response status: {}"+odmResponse.getStatusCode());
-            System.out.println("ODM service response body: {}" +odmResponse.getBody());
-
-            if (odmResponse.getBody() == null) {
-                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                        .body("ODM service returned null response");
-            }
-
-            String caseAction = request.getShj().get(0).getShjMember().getShjCase().getCaseAction();
-            boolean shouldCreateTask = odmResponse.getBody().getOpportunityResponseDetails()
-                    .getShjOpportunityDetails()
-                    .getCreateTask();
-
-            boolean shouldCreateCase = odmResponse.getBody().getOpportunityResponseDetails()
-                    .getShjOpportunityDetails()
-                    .getCreateCase();
-
-            String cmmId = request.getShj().get(0).getShjMember().getMemberIdentifier().getMembershipId();
-            String proxyId = request.getShj().get(0).getShjMember().getMemberIdentifier().getProxyId();
-
-            if ("update".equalsIgnoreCase(caseAction) && shouldCreateTask) {
-                return taskProcessor.process(payload, transactionId);
-            } else if ("new".equalsIgnoreCase(caseAction) && shouldCreateCase) {
-                ResponseEntity<?> verifyResponse = verifyMemberProcessor.process(payload, transactionId);
-                if (verifyResponse.getStatusCode().is2xxSuccessful()) {
-                    Map<String, Object> verifyResponseBody = (Map<String, Object>) verifyResponse.getBody();
-                    verifyResponseBody.put("transactionId", transactionId);
-                    int totalCount = (int) verifyResponseBody.get("totalCount");
-                    if (totalCount > 0) {
-                        ResponseEntity<?> caseResponse = caseProcessor.process(payload, transactionId);
-                        logger.info("Case response: {}", caseResponse.getStatusCode());
-                        return handleCaseResponse(caseResponse, verifyResponseBody);
-                    } else {
-                        ResponseEntity<?> fonResponse = foundationModelService.runService(cmmId, proxyId, foundationModelUrl, transactionId);
-                        if (fonResponse.getStatusCode().is2xxSuccessful()) {
-                            Map<String, Object> fonResponseBody = (Map<String, Object>) fonResponse.getBody();
-                            verifyResponseBody.putAll(fonResponseBody);
-                            ResponseEntity<?> caseResponse = caseProcessor.process(payload, transactionId);
-                            logger.info("Case response: {}", caseResponse.getStatusCode());
-                            return handleCaseResponse(caseResponse, verifyResponseBody);
-                        }
-                        if(fonResponse.getStatusCode() == HttpStatus.BAD_REQUEST) {
-                            verifyResponseBody.remove("totalCount");
-                            verifyResponseBody.put("Foundational model Service", fonResponse.getBody());
-                            verifyResponseBody.put("status", fonResponse.getStatusCode());
-                            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(verifyResponseBody);
-                        }
-                        if(fonResponse.getStatusCode() == HttpStatus.INTERNAL_SERVER_ERROR) {
-                            verifyResponseBody.remove("totalCount");
-                            verifyResponseBody.put("Foundational model Service", fonResponse.getBody());
-                            verifyResponseBody.put("status", fonResponse.getStatusCode());
-                            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(verifyResponseBody);
-                        }
-                        /*else {
-                            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                                    .body("Foundation Model Service call failed");
-                        }*/
-                    }
-                    verifyResponseBody.remove("totalCount");
-                    verifyResponse.getBody();
-                    return verifyResponse;
-                }
-            } else {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body("Invalid case action or task creation flag");
-            }
-
-        } catch (IOException e) {
-            Map<String, String> map = Map.of("Error", "Error reading file: " + e.getMessage(),
-                    "transactionId", transactionId ,
-                    "status", "Failed");
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(map);
-        } catch (ServiceException e) {
-            Map<String, String> map = Map.of("Error", "Error reading file: " + e.getMessage(),
-                    "transactionId", transactionId ,
-                    "status", "Failed");
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(map);
-        } catch (Exception e) {
-            throw new RuntimeException("Processing failed: " + e.getMessage(), e);
-        }
-        return ResponseEntity.ok("Processing completed successfully");
+    @BeforeEach
+    void setUp() throws Exception {
+        // Common mock setup
+        when(objectMapper.readValue(any(byte[].class), eq(ShjRequest.class)))
+            .thenReturn(createTestShjRequest());
+        when(objectMapper.writeValueAsString(any())).thenReturn("{}");
     }
 
-    public ResponseEntity<?> handleCaseResponse(ResponseEntity<?> caseResponse, Map<String, Object> verifyResponseBody) {
-        if (caseResponse.getStatusCode() == HttpStatus.OK) {
-            verifyResponseBody.put("caseResponse", caseResponse.getBody());
-            verifyResponseBody.put("status", caseResponse.getStatusCode());
-            verifyResponseBody.remove("totalCount");
-            return ResponseEntity.ok(verifyResponseBody);
-        }
-        if (caseResponse.getStatusCode() == HttpStatus.BAD_REQUEST) {
-            verifyResponseBody.put("caseResponse", caseResponse.getBody());
-            verifyResponseBody.put("status", caseResponse.getStatusCode());
-            verifyResponseBody.remove("totalCount");
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(verifyResponseBody);
-        }
-        if (caseResponse.getStatusCode() == HttpStatus.INTERNAL_SERVER_ERROR) {
-            verifyResponseBody.put("caseResponse", caseResponse.getBody());
-            verifyResponseBody.put("status", caseResponse.getStatusCode());
-            verifyResponseBody.remove("totalCount");
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(verifyResponseBody);
-        }
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Unexpected case response status");
+    // ========== SUCCESS SCENARIOS ==========
+
+    @Test
+    void processFile_UpdateCaseWithTask_Success() throws Exception {
+        // Setup
+        MockMultipartFile file = createTestFile("test.json", validJson);
+        OdmResponse odmResponse = createOdmResponse(true, false);
+        
+        when(odmService.callOdmService(any(), any(), any(), any()))
+            .thenReturn(ResponseEntity.ok(odmResponse));
+        when(taskProcessor.process(any(), any())).thenReturn(ResponseEntity.ok().build());
+
+        // Execute
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, testApiUrl, testFoundationUrl);
+
+        // Verify
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        verify(taskProcessor).process(any(), any());
     }
 
+    @Test
+    void processFile_NewCaseWithVerification_Success() throws Exception {
+        // Setup
+        MockMultipartFile file = createTestFile("test.json", validJson);
+        OdmResponse odmResponse = createOdmResponse(false, true);
+        Map<String, Object> verifyResponse = Map.of("totalCount", 1);
+        
+        when(odmService.callOdmService(any(), any(), any(), any()))
+            .thenReturn(ResponseEntity.ok(odmResponse));
+        when(verifyMemberProcessor.process(any(), any()))
+            .thenReturn(ResponseEntity.ok(verifyResponse));
+        when(caseProcessor.process(any(), any())).thenReturn(ResponseEntity.ok().build());
+
+        // Execute
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, testApiUrl, testFoundationUrl);
+
+        // Verify
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        verify(verifyMemberProcessor).process(any(), any());
+        verify(caseProcessor).process(any(), any());
+    }
+
+    @Test
+    void processFile_NewCaseWithFoundationModel_Success() throws Exception {
+        // Setup
+        MockMultipartFile file = createTestFile("test.json", validJson);
+        OdmResponse odmResponse = createOdmResponse(false, true);
+        Map<String, Object> verifyResponse = Map.of("totalCount", 0);
+        Map<String, Object> foundationResponse = Map.of("UpsertedAccount", "123");
+        
+        when(odmService.callOdmService(any(), any(), any(), any()))
+            .thenReturn(ResponseEntity.ok(odmResponse));
+        when(verifyMemberProcessor.process(any(), any()))
+            .thenReturn(ResponseEntity.ok(verifyResponse));
+        when(foundationModelService.runService(any(), any(), any(), any()))
+            .thenReturn(ResponseEntity.ok(foundationResponse));
+        when(caseProcessor.process(any(), any())).thenReturn(ResponseEntity.ok().build());
+
+        // Execute
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, testApiUrl, testFoundationUrl);
+
+        // Verify
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        verify(foundationModelService).runService(any(), any(), any(), any());
+    }
+
+    // ========== ERROR SCENARIOS ==========
+
+    @Test
+    void processFile_IOException() throws Exception {
+        // Setup
+        MockMultipartFile file = createTestFile("test.json", validJson);
+        when(objectMapper.readValue(any(byte[].class), eq(ShjRequest.class)))
+            .thenThrow(new IOException("File read error"));
+
+        // Execute
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, testApiUrl, testFoundationUrl);
+
+        // Verify
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertTrue(response.getBody() instanceof Map);
+    }
+
+    @Test
+    void processFile_JsonProcessingException() throws Exception {
+        // Setup
+        MockMultipartFile file = createTestFile("test.json", validJson);
+        when(objectMapper.writeValueAsString(any())).thenThrow(new JsonProcessingException("Error") {});
+
+        // Execute
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, testApiUrl, testFoundationUrl);
+
+        // Verify
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+    }
+
+    @Test
+    void processFile_OdmServiceNullResponse() throws Exception {
+        // Setup
+        MockMultipartFile file = createTestFile("test.json", validJson);
+        when(odmService.callOdmService(any(), any(), any(), any()))
+            .thenReturn(ResponseEntity.ok(null));
+
+        // Execute
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, testApiUrl, testFoundationUrl);
+
+        // Verify
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
+    }
+
+    @Test
+    void processFile_InvalidCaseAction() throws Exception {
+        // Setup
+        MockMultipartFile file = createTestFile("test.json", validJson);
+        OdmResponse odmResponse = createOdmResponse(false, false);
+        when(odmService.callOdmService(any(), any(), any(), any()))
+            .thenReturn(ResponseEntity.ok(odmResponse));
+
+        // Execute
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, testApiUrl, testFoundationUrl);
+
+        // Verify
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+    }
+
+    @Test
+    void processFile_FoundationModelServiceError() throws Exception {
+        // Setup
+        MockMultipartFile file = createTestFile("test.json", validJson);
+        OdmResponse odmResponse = createOdmResponse(false, true);
+        Map<String, Object> verifyResponse = Map.of("totalCount", 0);
+        
+        when(odmService.callOdmService(any(), any(), any(), any()))
+            .thenReturn(ResponseEntity.ok(odmResponse));
+        when(verifyMemberProcessor.process(any(), any()))
+            .thenReturn(ResponseEntity.ok(verifyResponse));
+        when(foundationModelService.runService(any(), any(), any(), any()))
+            .thenReturn(ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", "Bad request")));
+
+        // Execute
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, testApiUrl, testFoundationUrl);
+
+        // Verify
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+    }
+
+    @Test
+    void processFile_ServiceException() throws Exception {
+        // Setup
+        MockMultipartFile file = createTestFile("test.json", validJson);
+        when(objectMapper.readValue(any(byte[].class), eq(ShjRequest.class)))
+            .thenThrow(new ServiceException("Service error"));
+
+        // Execute
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, testApiUrl, testFoundationUrl);
+
+        // Verify
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
+    }
+
+    @Test
+    void handleCaseResponse_Success() {
+        // Setup
+        Map<String, Object> verifyResponse = Map.of("totalCount", 1);
+        ResponseEntity<?> caseResponse = ResponseEntity.ok(Map.of("caseId", "123"));
+
+        // Execute
+        ResponseEntity<?> response = shjFileProcessor.handleCaseResponse(caseResponse, verifyResponse);
+
+        // Verify
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertTrue(response.getBody() instanceof Map);
+    }
+
+    @Test
+    void handleCaseResponse_BadRequest() {
+        // Setup
+        Map<String, Object> verifyResponse = Map.of("totalCount", 1);
+        ResponseEntity<?> caseResponse = ResponseEntity.badRequest().body("Error");
+
+        // Execute
+        ResponseEntity<?> response = shjFileProcessor.handleCaseResponse(caseResponse, verifyResponse);
+
+        // Verify
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+    }
+
+    // ========== HELPER METHODS ==========
+
+    private MockMultipartFile createTestFile(String filename, String content) {
+        return new MockMultipartFile(
+            "file",
+            filename,
+            "application/json",
+            content.getBytes()
+        );
+    }
+
+    private ShjRequest createTestShjRequest() {
+        ShjRequest request = new ShjRequest();
+        ShjRequest.Shj shj = new ShjRequest.Shj();
+        ShjRequest.ShjMember member = new ShjRequest.ShjMember();
+        ShjRequest.MemberIdentifier identifier = new ShjRequest.MemberIdentifier();
+        ShjRequest.ShjCase shjCase = new ShjRequest.ShjCase();
+        
+        identifier.setMembershipId("123");
+        identifier.setProxyId("456");
+        member.setMemberIdentifier(identifier);
+        shjCase.setCaseAction("new");
+        shjCase.setShjID("789");
+        member.setShjCase(shjCase);
+        shj.setShjMember(member);
+        request.getShj().add(shj);
+        
+        return request;
+    }
+
+    private OdmResponse createOdmResponse(boolean createTask, boolean createCase) {
+        OdmResponse response = new OdmResponse();
+        OdmResponse.OpportunityResponseDetails details = new OdmResponse.OpportunityResponseDetails();
+        OdmResponse.ShjOpportunityDetails shjDetails = new OdmResponse.ShjOpportunityDetails();
+        
+        shjDetails.setCreateTask(createTask);
+        shjDetails.setCreateCase(createCase);
+        details.setShjOpportunityDetails(shjDetails);
+        response.setOpportunityResponseDetails(details);
+        
+        return response;
+    }
 }
