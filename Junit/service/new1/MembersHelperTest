@@ -1,0 +1,87 @@
+package com.aetna.clinical.common.util;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
+import org.springframework.util.MultiValueMap;
+import org.springframework.web.client.RestTemplate;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class MembersHelperTest {
+
+    @Mock
+    private RestTemplate restTemplate;
+    @Mock
+    private DataConverter dataConverter;
+    
+    @InjectMocks
+    private MembersHelper membersHelper;
+
+    @BeforeEach
+    void setUp() {
+        membersHelper.setTokenUrl("http://test.com");
+        membersHelper.setClientId("clientId");
+        membersHelper.setClientSecret("secret");
+        membersHelper.setGrant_type("password");
+    }
+
+    @Test
+    void buildHttpHeader_WithValidToken() {
+        TokenResponse mockToken = new TokenResponse();
+        mockToken.setAccess_token("test-token");
+        
+        when(dataConverter.jsonToObject(anyString(), eq(TokenResponse.class))).thenReturn(mockToken);
+        when(restTemplate.postForEntity(anyString(), any(MultiValueMap.class), eq(String.class)))
+            .thenReturn(ResponseEntity.ok("{}"));
+        
+        HttpHeaders headers = membersHelper.buildHttpHeader();
+        
+        assertNotNull(headers);
+        assertEquals("Bearer test-token", headers.getFirst("Authorization"));
+    }
+
+    @Test
+    void buildHttpHeader_TokenRequestFails() {
+        when(restTemplate.postForEntity(anyString(), any(MultiValueMap.class), eq(String.class)))
+            .thenThrow(new RuntimeException("Error"));
+        
+        HttpHeaders headers = membersHelper.buildHttpHeader();
+        
+        assertNotNull(headers);
+        assertNull(headers.get("Authorization"));
+    }
+
+    @Test
+    void getFreshToken_Success() {
+        TokenResponse mockToken = new TokenResponse();
+        mockToken.setAccess_token("test-token");
+        
+        when(dataConverter.jsonToObject(anyString(), eq(TokenResponse.class))).thenReturn(mockToken);
+        when(restTemplate.postForEntity(anyString(), any(MultiValueMap.class), eq(String.class)))
+            .thenReturn(ResponseEntity.ok("{}"));
+        
+        TokenResponse result = membersHelper.getFreshToken();
+        
+        assertNotNull(result);
+        assertEquals("test-token", result.getAccess_token());
+    }
+
+    @Test
+    void getFreshToken_Exception() {
+        when(restTemplate.postForEntity(anyString(), any(MultiValueMap.class), eq(String.class)))
+            .thenThrow(new RuntimeException("Error"));
+        
+        TokenResponse result = membersHelper.getFreshToken();
+        
+        assertNull(result);
+    }
+}
