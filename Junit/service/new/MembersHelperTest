@@ -1,0 +1,72 @@
+package com.aetna.clinical.common.util;
+
+import com.aetna.clinical.common.dto.token.TokenResponse;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.*;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.web.client.RestTemplate;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+class MembersHelperTest {
+
+    @InjectMocks
+    private MembersHelper membersHelper;
+
+    @Mock private RestTemplate restTemplate;
+    @Mock private DataConverter objectConverter;
+
+    @BeforeEach
+    void setup() {
+        MockitoAnnotations.openMocks(this);
+        membersHelper = new MembersHelper();
+        membersHelper.tokenUrl = "http://mock.token";
+        membersHelper.clientId = "client";
+        membersHelper.clientSecret = "secret";
+        membersHelper.grant_type = "client_credentials";
+        membersHelper.restTemplate = restTemplate;
+        membersHelper.objectConverter = objectConverter;
+    }
+
+    @Test
+    void testBuildHttpHeader_withToken() {
+        TokenResponse token = new TokenResponse();
+        token.setAccess_token("mock-token");
+        MembersHelperTestHelper.setTokenResponse(membersHelper, token);
+
+        HttpHeaders headers = membersHelper.buildHttpHeader();
+
+        assertEquals("Bearer mock-token", headers.getFirst("Authorization"));
+    }
+
+    @Test
+    void testGetFreshToken_success() throws Exception {
+        String response = "{\"access_token\":\"token123\"}";
+        TokenResponse mockToken = new TokenResponse();
+        mockToken.setAccess_token("token123");
+
+        when(restTemplate.postForEntity(any(), any(), eq(String.class)))
+                .thenReturn(ResponseEntity.ok(response));
+        when(objectConverter.jsonToObject(response, TokenResponse.class)).thenReturn(mockToken);
+        when(objectConverter.convertToJson(any())).thenReturn("json");
+
+        TokenResponse result = membersHelper.getToken();
+
+        assertNotNull(result);
+        assertEquals("token123", result.getAccess_token());
+    }
+
+    @Test
+    void testGetFreshToken_failure() {
+        when(restTemplate.postForEntity(any(), any(), eq(String.class)))
+                .thenThrow(new RuntimeException("Fail"));
+
+        TokenResponse result = membersHelper.getToken();
+
+        assertNull(result.getAccess_token());
+    }
+}
