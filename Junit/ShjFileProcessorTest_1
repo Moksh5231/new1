@@ -1,0 +1,90 @@
+package com.aetna.clinical.common.util;
+
+import com.aetna.clinical.common.dto.response.OdmResponse;
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest;
+import com.aetna.clinical.common.exceptions.ServiceException;
+import com.aetna.clinical.common.service.*;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+import org.springframework.http.*;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.IOException;
+import java.util.*;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
+class ShjFileProcessorTest {
+
+    @Mock private ObjectMapper objectMapper;
+    @Mock private TaskProcessor taskProcessor;
+    @Mock private VerifyMemberProcessor verifyMemberProcessor;
+    @Mock private CaseProcessor caseProcessor;
+    @Mock private OdmService odmService;
+    @Mock private PayloadTransformer payloadTransformer;
+    @Mock private FoundationModelService foundationModelService;
+
+    @InjectMocks private ShjFileProcessor shjFileProcessor;
+
+    private final String testApiUrl = "http://test-odm-url.com";
+    private final String testFoundationUrl = "http://test-foundation-url.com";
+    private final String validJson = "{\"shj\":[{\"shjMember\":{\"memberIdentifier\":{\"membershipId\":\"123\",\"proxyId\":\"456\"},\"shjCase\":{\"caseAction\":\"new\",\"shjID\":\"789\"}}}]}";
+
+    @BeforeEach
+    void setUp() throws Exception {
+        when(objectMapper.readValue(any(byte[].class), eq(ShjRequest.class)))
+                .thenReturn(createTestShjRequest());
+        when(objectMapper.writeValueAsString(any())).thenReturn("{}");
+    }
+
+    @Test
+    void processFile_UpdateCaseWithTask_Success() throws Exception {
+        MockMultipartFile file = createTestFile();
+        OdmResponse odmResponse = createOdmResponse(true, false);
+
+        when(odmService.callOdmService(any(), any(), any(), any()))
+                .thenReturn(ResponseEntity.ok(odmResponse));
+        when(taskProcessor.process(any(), any())).thenReturn(ResponseEntity.ok().build());
+
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, testApiUrl, testFoundationUrl);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        verify(taskProcessor).process(any(), any());
+    }
+
+    @Test
+    void processFile_NewCaseWithVerification_Success() throws Exception {
+        MockMultipartFile file = createTestFile();
+        OdmResponse odmResponse = createOdmResponse(false, true);
+        Map<String, Object> verifyResponse = Map.of("totalCount", 1);
+
+        when(odmService.callOdmService(any(), any(), any(), any()))
+                .thenReturn(ResponseEntity.ok(odmResponse));
+        when(verifyMemberProcessor.process(any(), any())).thenReturn(verifyResponse);
+        when(caseProcessor.process(any(), any())).thenReturn(ResponseEntity.ok().build());
+
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, testApiUrl, testFoundationUrl);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        verify(verifyMemberProcessor).process(any(), any());
+        verify(caseProcessor).process(any(), any());
+    }
+
+    @Test
+    void processFile_NewCaseWithFoundationModel_Success() throws Exception {
+        MockMultipartFile file = createTestFile();
+        Odm
