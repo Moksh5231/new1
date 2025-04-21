@@ -1,0 +1,34 @@
+package com.aetna.clinical.common.util;
+
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest;
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class PayloadTransformerTest {
+
+    @Test
+    void testTransformPayload_fullFlow() {
+        PayloadTransformer transformer = new PayloadTransformer();
+        ShjRequest request = new ShjRequest();
+        ShjRequest.Shj shj = new ShjRequest.Shj();
+        ShjRequest.ShjMember member = new ShjRequest.ShjMember();
+        ShjRequest.ShjCase shjCase = new ShjRequest.ShjCase();
+        ShjRequest.ShjTask task = new ShjRequest.ShjTask();
+        ShjRequest.CareManagementStaffer staffer = new ShjRequest.CareManagementStaffer();
+
+        staffer.setAssignedUserId("uid");
+        task.setCareManagementStaffer(staffer);
+        shjCase.setShjTask(task);
+        member.setShjCase(shjCase);
+        shj.setShjMember(member);
+        request.setShj(List.of(shj));
+
+        Map<String, Object> transformed = transformer.transformPayload(request, "tx123");
+
+        assertNotNull(transformed.get("ONECMSHJOpportunityRequest"));
+    }
+}
