@@ -1,0 +1,47 @@
+package com.aetna.clinical.common.exceptions;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+@ExtendWith(MockitoExtension.class)
+class GlobalExceptionHandlerTest {
+
+    @InjectMocks
+    private GlobalExceptionHandler exceptionHandler;
+
+    @Test
+    void handleApiException() {
+        ApiException ex = new ApiException("Test error", HttpStatus.BAD_REQUEST);
+        ResponseEntity<GlobalExceptionHandler.ErrorResponse> response = 
+            exceptionHandler.handleApiException(ex);
+        
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertEquals("Test error", response.getBody().getMessage());
+    }
+
+    @Test
+    void handleException() {
+        Exception ex = new Exception("Test error");
+        ResponseEntity<GlobalExceptionHandler.ErrorResponse> response = 
+            exceptionHandler.handleException(ex);
+        
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
+        assertEquals("Internal Server Error", response.getBody().getMessage());
+    }
+
+    @Test
+    void handleNoResourceFound() {
+        NoResourceFoundException ex = new NoResourceFoundException("GET", "/test");
+        ResponseEntity<String> response = exceptionHandler.handleNoResourceFound(ex);
+        
+        assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+        assertTrue(response.getBody().contains("Resource not found"));
+    }
+}
