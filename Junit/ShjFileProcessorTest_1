@@ -87,4 +87,153 @@ class ShjFileProcessorTest {
     @Test
     void processFile_NewCaseWithFoundationModel_Success() throws Exception {
         MockMultipartFile file = createTestFile();
-        Odm
+        OdmResponse odmResponse = createOdmResponse(false, true);
+        Map<String, Object> verifyResponse = Map.of("totalCount", 0);
+        Map<String, Object> foundationResponse = Map.of("UpsertedAccount", "123");
+
+        when(odmService.callOdmService(any(), any(), any(), any())).thenReturn(ResponseEntity.ok(odmResponse));
+        when(verifyMemberProcessor.process(any(), any())).thenReturn(verifyResponse);
+        when(foundationModelService.runService(any(), any(), any(), any())).thenReturn(ResponseEntity.ok(foundationResponse));
+        when(caseProcessor.process(any(), any())).thenReturn(ResponseEntity.ok().build());
+
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, testApiUrl, testFoundationUrl);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        verify(foundationModelService).runService(any(), any(), any(), any());
+    }
+
+    @Test
+    void processFile_IOException() throws Exception {
+        MockMultipartFile file = createTestFile();
+        when(objectMapper.readValue(any(byte[].class), eq(ShjRequest.class)))
+                .thenThrow(new IOException("File read error"));
+
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, testApiUrl, testFoundationUrl);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertTrue(response.getBody() instanceof Map);
+    }
+
+    @Test
+    void processFile_JsonProcessingException() throws Exception {
+        MockMultipartFile file = createTestFile();
+        when(objectMapper.writeValueAsString(any())).thenThrow(new JsonProcessingException("Error") {});
+
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, testApiUrl, testFoundationUrl);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+    }
+
+    @Test
+    void processFile_OdmServiceNullResponse() throws Exception {
+        MockMultipartFile file = createTestFile();
+        when(odmService.callOdmService(any(), any(), any(), any()))
+                .thenReturn(ResponseEntity.ok(null));
+
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, testApiUrl, testFoundationUrl);
+
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
+    }
+
+    @Test
+    void processFile_InvalidCaseAction() throws Exception {
+        MockMultipartFile file = createTestFile();
+        OdmResponse odmResponse = createOdmResponse(false, false);
+
+        when(odmService.callOdmService(any(), any(), any(), any()))
+                .thenReturn(ResponseEntity.ok(odmResponse));
+
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, testApiUrl, testFoundationUrl);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+    }
+
+    @Test
+    void processFile_FoundationModelServiceError() throws Exception {
+        MockMultipartFile file = createTestFile();
+        OdmResponse odmResponse = createOdmResponse(false, true);
+        Map<String, Object> verifyResponse = Map.of("totalCount", 0);
+
+        when(odmService.callOdmService(any(), any(), any(), any())).thenReturn(ResponseEntity.ok(odmResponse));
+        when(verifyMemberProcessor.process(any(), any())).thenReturn(verifyResponse);
+        when(foundationModelService.runService(any(), any(), any(), any()))
+                .thenReturn(ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", "Bad request")));
+
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, testApiUrl, testFoundationUrl);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+    }
+
+    @Test
+    void processFile_ServiceException() throws Exception {
+        MockMultipartFile file = createTestFile();
+        when(objectMapper.readValue(any(byte[].class), eq(ShjRequest.class)))
+                .thenThrow(new ServiceException("Service error", HttpStatus.INTERNAL_SERVER_ERROR));
+
+        ResponseEntity<?> response = shjFileProcessor.processFile(file, testApiUrl, testFoundationUrl);
+
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
+    }
+
+    @Test
+    void handleCaseResponse_Success() {
+        Map<String, Object> verifyResponse = Map.of("totalCount", 1);
+        ResponseEntity<?> caseResponse = ResponseEntity.ok(Map.of("caseId", "123"));
+
+        ResponseEntity<?> response = shjFileProcessor.handleCaseResponse(caseResponse, verifyResponse);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertTrue(response.getBody() instanceof Map);
+    }
+
+    @Test
+    void handleCaseResponse_BadRequest() {
+        Map<String, Object> verifyResponse = Map.of("totalCount", 1);
+        ResponseEntity<?> caseResponse = ResponseEntity.badRequest().body("Error");
+
+        ResponseEntity<?> response = shjFileProcessor.handleCaseResponse(caseResponse, verifyResponse);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+    }
+
+    // ========== HELPER METHODS ==========
+
+    private MockMultipartFile createTestFile() {
+        return new MockMultipartFile("file", "test.json", "application/json", validJson.getBytes());
+    }
+
+    private ShjRequest createTestShjRequest() {
+        ShjRequest request = new ShjRequest();
+        request.setShj(new ArrayList<>());
+
+        ShjRequest.Shj shj = new ShjRequest.Shj();
+        ShjRequest.ShjMember member = new ShjRequest.ShjMember();
+        ShjRequest.MemberIdentifier identifier = new ShjRequest.MemberIdentifier();
+        identifier.setMembershipId("123");
+        identifier.setProxyId("456");
+
+        member.setMemberIdentifier(identifier);
+        ShjRequest.ShjCase shjCase = new ShjRequest.ShjCase();
+        shjCase.setCaseAction("new");
+        shjCase.setShjID("789");
+        member.setShjCase(shjCase);
+
+        shj.setShjMember(member);
+        request.getShj().add(shj);
+
+        return request;
+    }
+
+    private OdmResponse createOdmResponse(boolean createTask, boolean createCase) {
+        OdmResponse response = new OdmResponse();
+        OdmResponse.OpportunityResponseDetails details = new OdmResponse.OpportunityResponseDetails();
+        OdmResponse.ShjOpportunityDetails shjDetails = new OdmResponse.ShjOpportunityDetails();
+
+        shjDetails.setCreateTask(createTask);
+        shjDetails.setCreateCase(createCase);
+        details.setShjOpportunityDetails(shjDetails);
+        response.setOpportunityResponseDetails(details);
+
+        return response;
+    }
+}
