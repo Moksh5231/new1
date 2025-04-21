@@ -1,0 +1,90 @@
+package com.aetna.clinical.common.service;
+
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest;
+import com.aetna.clinical.common.util.MembersHelper;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.validation.ValidationException;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.*;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.Collections;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+class ShjRequestProcessorTest {
+
+    private TestProcessor processor;
+
+    @Mock private ObjectMapper objectMapper;
+    @Mock private RestTemplate restTemplate;
+    @Mock private MembersHelper memberHelper;
+
+    @BeforeEach
+    void setUp() {
+        MockitoAnnotations.openMocks(this);
+        processor = new TestProcessor(objectMapper, restTemplate, memberHelper);
+    }
+
+    @Test
+    void testProcess_success() throws Exception {
+        String payload = "json";
+        String txId = "tx123";
+        ShjRequest mockRequest = new ShjRequest();
+        mockRequest.setShj(Collections.emptyList());
+
+        when(objectMapper.readValue(payload, ShjRequest.class)).thenReturn(mockRequest);
+
+        ResponseEntity<?> response = processor.process(payload, txId);
+
+        assertEquals(200, response.getStatusCodeValue());
+    }
+
+    @Test
+    void testProcess_validationException() throws Exception {
+        String payload = "json";
+        String txId = "tx123";
+        ShjRequest mockRequest = new ShjRequest();
+
+        when(objectMapper.readValue(payload, ShjRequest.class)).thenReturn(mockRequest);
+        doThrow(new ValidationException("Invalid")).when(processor).validateRequest(any(), any());
+
+        ResponseEntity<?> response = processor.process(payload, txId);
+
+        assertEquals(400, response.getStatusCodeValue());
+        assertTrue(response.getBody().toString().contains("Validation error"));
+    }
+
+    @Test
+    void testProcess_runtimeException() throws Exception {
+        String payload = "json";
+        String txId = "tx123";
+
+        when(objectMapper.readValue(payload, ShjRequest.class)).thenThrow(new RuntimeException("fail"));
+
+        ResponseEntity<?> response = processor.process(payload, txId);
+
+        assertEquals(500, response.getStatusCodeValue());
+        assertTrue(response.getBody().toString().contains("Processing failed"));
+    }
+
+    static class TestProcessor extends ShjRequestProcessor<String, String> {
+        protected TestProcessor(ObjectMapper objectMapper, RestTemplate restTemplate, MembersHelper memberHelper) {
+            super(objectMapper, restTemplate, memberHelper);
+        }
+
+        @Override protected void validateRequest(ShjRequest request, String transactionId) {}
+
+        @Override protected String buildServiceRequest(ShjRequest request, String transactionId) {
+            return "serviceReq";
+        }
+
+        @Override protected ResponseEntity<?> executeServiceCall(String request, String transactionId) {
+            return ResponseEntity.ok("success");
+        }
+    }
+}
