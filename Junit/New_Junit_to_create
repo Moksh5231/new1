@@ -1,0 +1,347 @@
+package com.aetna.clinical.common.service;
+
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest;
+import com.aetna.clinical.common.util.MembersHelper;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.validation.ValidationException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.Map;
+
+public abstract class ShjRequestProcessor<Req,Res> {
+
+    protected final Logger logger = LoggerFactory.getLogger(getClass());
+
+    @Autowired
+    protected MembersHelper memberHelper;
+    protected final ObjectMapper objectMapper;
+
+    @Autowired
+    @Qualifier("proxyRestTemplate")
+    protected final RestTemplate restTemplate;
+
+
+    protected ShjRequestProcessor(ObjectMapper objectMapper, RestTemplate restTemplate, MembersHelper memberHelper) {
+        this.objectMapper = objectMapper;
+        this.restTemplate = restTemplate;
+        this.memberHelper = memberHelper;
+    }
+
+    public ResponseEntity<?> process(String payload, String transactionId){
+        try{
+            ShjRequest request = parseRequest(payload);
+            validateRequest(request, transactionId);
+            Req serviceRequest = buildServiceRequest(request, transactionId);
+            return executeServiceCall(serviceRequest,  transactionId);
+        }catch (ValidationException e){
+            logger.error("Validation error: {}", e.getMessage());
+            return ResponseEntity.badRequest()
+                    .body(Map.of("Error", "Validation error: " + e.getMessage(),
+                            "transactionId", transactionId));
+        }catch (Exception e){
+            logger.error("Error processing failed: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("Error", "Processing failed: " + e.getMessage(),
+                            "transactionId", transactionId));
+        }
+    }
+
+    protected ShjRequest parseRequest(String payload) throws JsonProcessingException {
+        return objectMapper.readValue(payload, ShjRequest.class);
+    }
+
+    protected abstract void validateRequest(ShjRequest request, String transactionId);
+
+    protected abstract Req buildServiceRequest(ShjRequest request, String transactionId);
+
+    protected abstract ResponseEntity<?> executeServiceCall(Req request, String transactionId) throws JsonProcessingException;
+}
+
+-------------------------------------------
+
+package com.aetna.clinical.common.util;
+
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Component;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
+import org.springframework.web.client.RestTemplate;
+
+import java.time.Instant;
+
+/**
+ * This is SFHC API Helper class
+ */
+@Component
+public class MembersHelper {
+
+    @Value("${SFHC.apic.Token_URL}")
+    private String tokenUrl;
+
+
+    @Value("${SFHC.apic.client_id}")
+    private String clientId;
+
+    @Value("${SFHC.apic.grant_type}")
+    private String grant_type;
+    @Value("${SFHC.apic.client_secret}")
+    private String clientSecret;
+
+    @Autowired
+    private RestTemplate restTemplate;
+    @Autowired
+    private DataConverter objectConverter;
+
+    private static  TokenResponse tokenResponse = null;
+
+    private static Logger logger = LoggerFactory.getLogger(MembersHelper.class);
+
+    public HttpHeaders buildHttpHeader() {
+
+        logger.info("Token Url is {}", tokenUrl);
+        logger.info("Client Id is {}", clientId);
+        logger.info("Client Secret is {}", clientSecret);
+        logger.info("Grant Type is {}", grant_type);
+
+        HttpHeaders httpHeaders = new HttpHeaders();
+        TokenResponse token = getToken();
+        if (null != token) {
+            httpHeaders.add("Authorization", "Bearer " + token.getAccess_token());
+        }
+        return httpHeaders;
+    }
+
+    public TokenResponse getToken() {
+        if (tokenResponse == null) {
+            tokenResponse = getFreshToken();
+        }
+        return tokenResponse;
+    }
+
+    private TokenResponse getFreshToken() {
+        try {
+            MultiValueMap<String, String> map = new LinkedMultiValueMap<>();
+            map.add("grant_type", grant_type);
+            map.add("client_id", clientId);
+            map.add("client_secret", clientSecret);
+
+            logger.info("APIC token call start - Token URL -  {}", tokenUrl);
+            ResponseEntity<String> postResponse = restTemplate.postForEntity(tokenUrl, map, String.class);
+
+            String responseBody = postResponse.getBody();
+            logger.info("token call success - responseBody - {}", responseBody);
+            tokenResponse = (TokenResponse) objectConverter.jsonToObject(responseBody, TokenResponse.class);
+            logger.info("Token {}", objectConverter.convertToJson(tokenResponse));
+            tokenResponse.setIssued_at(String.valueOf(Instant.now().getEpochSecond()));
+            logger.info("Token value - {}", tokenResponse.getAccess_token());
+
+        } catch (Exception tokenException) {
+            logger.error("Exception in getFreshToken {}", tokenException);
+        }
+        return tokenResponse;
+    }
+
+}
+
+------------------------------------------
+
+package com.aetna.clinical.common.util;
+
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@Component
+public class PayloadTransformer {
+    private static final Logger logger = LoggerFactory.getLogger(PayloadTransformer.class);
+
+    public Map<String, Object> transformPayload(ShjRequest shjRequest, String transactionId) {
+        logger.info("Transforming SHJ payload for transaction: {}", transactionId);
+
+        Map<String, Object> transformedPayload = new HashMap<>();
+
+        // Add the decision ID
+        transformedPayload.put("__DecisionID__", "SampleDecision");
+
+        // Create the opportunity request map
+        Map<String, Object> opportunityRequest = new HashMap<>();
+
+        // Add transaction ID
+        opportunityRequest.put("transactionId", transactionId);
+
+        // Get the first SHJ item (assuming single item as per sample)
+        if (shjRequest.getShj() != null && !shjRequest.getShj().isEmpty()) {
+            ShjRequest.Shj shj = shjRequest.getShj().get(0);
+
+            // Move all SHJ fields directly under opportunityRequest
+            opportunityRequest.put("specVersion", shj.getSpecVersion());
+            opportunityRequest.put("deliveryChannel", shj.getDeliveryChannel());
+
+            // Transform member data
+            opportunityRequest.put("shjMember", transformShjMember(shj.getShjMember()));
+        }
+
+        // Add the wrapper to the transformed payload
+        transformedPayload.put("ONECMSHJOpportunityRequest", opportunityRequest);
+
+        return transformedPayload;
+    }
+
+    private Map<String, Object> transformShjMember(ShjRequest.ShjMember shjMember) {
+        Map<String, Object> memberMap = new HashMap<>();
+
+        // Member identifier
+        Map<String, Object> memberIdentifier = new HashMap<>();
+        memberIdentifier.put("membershipId", shjMember.getMemberIdentifier().getMembershipId());
+        memberIdentifier.put("proxyId", shjMember.getMemberIdentifier().getProxyId());
+        memberMap.put("memberIdentifier", memberIdentifier);
+
+        memberMap.put("programName", shjMember.getProgramName());
+
+        // Transform case data
+        memberMap.put("shjCase", transformShjCase(shjMember.getShjCase()));
+
+        return memberMap;
+    }
+
+    private Map<String, Object> transformShjCase(ShjRequest.ShjCase shjCase) {
+        Map<String, Object> caseMap = new HashMap<>();
+
+        caseMap.put("shjID", shjCase.getShjID());
+        caseMap.put("shjTxnID", shjCase.getShjTxnID());
+        caseMap.put("caseAction", shjCase.getCaseAction());
+        caseMap.put("caseReason", shjCase.getCaseReason());
+
+        // Transform task data
+        if (shjCase.getShjTask() != null) {
+            caseMap.put("shjTask", transformShjTask(shjCase.getShjTask()));
+        }
+
+        // Add additional fields if they exist
+        if (shjCase.getPersonalizedContent() != null) {
+            caseMap.put("personalizedContent", shjCase.getPersonalizedContent());
+        }
+        if (shjCase.getShjOpptyCreationDt() != null) {
+            caseMap.put("shjOpptyCreationDt", shjCase.getShjOpptyCreationDt());
+        }
+        if (shjCase.getShjOpptyUpdatedDt() != null) {
+            caseMap.put("shjOpptyUpdatedDt", shjCase.getShjOpptyUpdatedDt());
+        }
+        if (shjCase.getShjEventTransactionDt() != null) {
+            caseMap.put("shjEventTransactionDt", shjCase.getShjEventTransactionDt());
+        }
+
+        return caseMap;
+    }
+
+    private Map<String, Object> transformShjTask(ShjRequest.ShjTask shjTask) {
+        Map<String, Object> taskMap = new HashMap<>();
+
+        // Care management staffer
+        Map<String, Object> stafferMap = new HashMap<>();
+        ShjRequest.CareManagementStaffer staffer = shjTask.getCareManagementStaffer();
+        stafferMap.put("assignedUserId", staffer.getAssignedUserId());
+        stafferMap.put("assignedUserIdType", staffer.getAssignedUserIdType());
+        stafferMap.put("assignedUserName", staffer.getAssignedUserName());
+        stafferMap.put("assignedUserRole", staffer.getAssignedUserRole());
+        stafferMap.put("assignedUserEmail", staffer.getAssignedUserEmail());
+        stafferMap.put("assignedUserPhone", staffer.getAssignedUserPhone());
+        taskMap.put("careManagementStaffer", stafferMap);
+
+        taskMap.put("comments", shjTask.getComments());
+        taskMap.put("dueDate", shjTask.getDueDate());
+        taskMap.put("priority", shjTask.getPriority());
+       // taskMap.put("status", shjTask.getStatus());
+        taskMap.put("subject", shjTask.getSubject());
+        taskMap.put("taskRecordType", shjTask.getTaskRecordType());
+        taskMap.put("whatId", shjTask.getWhatId());
+
+        return taskMap;
+    }
+}
+
+---------------------------------------------------------------
+package com.aetna.clinical.common.exceptions;
+
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.ErrorResponse;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
+
+import java.time.Instant;
+
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+
+    private static final Logger logger = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    @ExceptionHandler(ApiException.class)
+    public ResponseEntity<ErrorResponse> handleApiException(ApiException ex) {
+        logger.error("API Error: {}", ex.getMessage());
+        return ResponseEntity.status(ex.getStatus())
+                .body(new ErrorResponse(ex.getMessage(), ex.getStatus()));
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ErrorResponse> handleException(Exception ex) {
+        logger.error("Unexpected Error: {}", ex.getMessage(), ex);
+        return ResponseEntity.internalServerError()
+                .body(new ErrorResponse("Internal Server Error", HttpStatus.INTERNAL_SERVER_ERROR));
+    }
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<String> handleNoResourceFound(NoResourceFoundException ex) {
+        return ResponseEntity.status(404).body("Resource not found: " + ex.getMessage());
+    }
+
+
+
+    private static class ErrorResponse {
+        private final String message;
+        private final HttpStatus status;
+        private final Instant timestamp = Instant.now();
+
+        public ErrorResponse(String message, HttpStatus status) {
+            this.message = message;
+            this.status = status;
+        }
+
+        public String getMessage() {
+            return message;
+        }
+
+        public HttpStatus getStatus() {
+            return status;
+        }
+
+        public Instant getTimestamp() {
+            return timestamp;
+        }
+    }
+
+}
+--------------------------------------
