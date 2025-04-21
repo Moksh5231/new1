@@ -1,0 +1,175 @@
+package com.aetna.clinical.common.util;
+
+import com.aetna.clinical.common.util.MembersHelper;
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest;
+import com.aetna.clinical.common.dto.verifymember.ShjCompositeResponseForVerifyMember;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.hibernate.service.spi.ServiceException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Component;
+import org.springframework.web.multipart.MultipartFile;
+import com.aetna.clinical.common.service.*;
+import com.aetna.clinical.common.dto.response.OdmResponse;
+
+import java.io.IOException;
+import java.util.Map;
+import java.util.UUID;
+
+@Component
+public class ShjFileProcessor {
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    @Autowired
+    private TaskProcessor taskProcessor;
+
+    @Autowired
+    private VerifyMemberProcessor verifyMemberProcessor;
+    @Autowired
+    private CaseProcessor caseProcessor;
+    @Autowired
+    private  OdmService odmService;
+    @Autowired
+    private  PayloadTransformer payloadTransformer;
+
+    @Autowired
+    private  FoundationModelService foundationModelService;
+
+    private static final Logger logger = LoggerFactory.getLogger(ShjFileProcessor.class);
+
+
+
+    public ResponseEntity<?> processFile(MultipartFile file, String apiUrl, String foundationModelUrl) {
+        String transactionId = UUID.randomUUID().toString();
+        /*HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);*/
+
+        try {
+            String payload = new String(file.getBytes());
+            ShjRequest request = objectMapper.readValue(file.getBytes(), ShjRequest.class);
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            Map<String, Object> transformedPayload = payloadTransformer.transformPayload(request, transactionId);
+
+            ResponseEntity<OdmResponse> odmResponse = odmService.callOdmService(
+                    apiUrl,
+                    objectMapper.writeValueAsString(transformedPayload),
+                    transactionId,
+                    headers
+            );
+
+            System.out.println("ODM service response status: {}"+odmResponse.getStatusCode());
+            System.out.println("ODM service response body: {}" +odmResponse.getBody());
+
+            if (odmResponse.getBody() == null) {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                        .body("ODM service returned null response");
+            }
+
+            String caseAction = request.getShj().get(0).getShjMember().getShjCase().getCaseAction();
+            boolean shouldCreateTask = odmResponse.getBody().getOpportunityResponseDetails()
+                    .getShjOpportunityDetails()
+                    .getCreateTask();
+
+            boolean shouldCreateCase = odmResponse.getBody().getOpportunityResponseDetails()
+                    .getShjOpportunityDetails()
+                    .getCreateCase();
+
+            String cmmId = request.getShj().get(0).getShjMember().getMemberIdentifier().getMembershipId();
+            String proxyId = request.getShj().get(0).getShjMember().getMemberIdentifier().getProxyId();
+
+            if ("update".equalsIgnoreCase(caseAction) && shouldCreateTask) {
+                return taskProcessor.process(payload, transactionId);
+            } else if ("new".equalsIgnoreCase(caseAction) && shouldCreateCase) {
+                ResponseEntity<?> verifyResponse = verifyMemberProcessor.process(payload, transactionId);
+                if (verifyResponse.getStatusCode().is2xxSuccessful()) {
+                    Map<String, Object> verifyResponseBody = (Map<String, Object>) verifyResponse.getBody();
+                    verifyResponseBody.put("transactionId", transactionId);
+                    int totalCount = (int) verifyResponseBody.get("totalCount");
+                    if (totalCount > 0) {
+                        ResponseEntity<?> caseResponse = caseProcessor.process(payload, transactionId);
+                        logger.info("Case response: {}", caseResponse.getStatusCode());
+                        return handleCaseResponse(caseResponse, verifyResponseBody);
+                    } else {
+                        ResponseEntity<?> fonResponse = foundationModelService.runService(cmmId, proxyId, foundationModelUrl, transactionId);
+                        if (fonResponse.getStatusCode().is2xxSuccessful()) {
+                            Map<String, Object> fonResponseBody = (Map<String, Object>) fonResponse.getBody();
+                            verifyResponseBody.putAll(fonResponseBody);
+                            ResponseEntity<?> caseResponse = caseProcessor.process(payload, transactionId);
+                            logger.info("Case response: {}", caseResponse.getStatusCode());
+                            return handleCaseResponse(caseResponse, verifyResponseBody);
+                        }
+                        if(fonResponse.getStatusCode() == HttpStatus.BAD_REQUEST) {
+                            verifyResponseBody.remove("totalCount");
+                            verifyResponseBody.put("Foundational model Service", fonResponse.getBody());
+                            verifyResponseBody.put("status", fonResponse.getStatusCode());
+                            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(verifyResponseBody);
+                        }
+                        if(fonResponse.getStatusCode() == HttpStatus.INTERNAL_SERVER_ERROR) {
+                            verifyResponseBody.remove("totalCount");
+                            verifyResponseBody.put("Foundational model Service", fonResponse.getBody());
+                            verifyResponseBody.put("status", fonResponse.getStatusCode());
+                            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(verifyResponseBody);
+                        }
+                        /*else {
+                            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                                    .body("Foundation Model Service call failed");
+                        }*/
+                    }
+                    verifyResponseBody.remove("totalCount");
+                    verifyResponse.getBody();
+                    return verifyResponse;
+                }
+            } else {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body("Invalid case action or task creation flag");
+            }
+
+        } catch (IOException e) {
+            Map<String, String> map = Map.of("Error", "Error reading file: " + e.getMessage(),
+                    "transactionId", transactionId ,
+                    "status", "Failed");
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(map);
+        } catch (ServiceException e) {
+            Map<String, String> map = Map.of("Error", "Error reading file: " + e.getMessage(),
+                    "transactionId", transactionId ,
+                    "status", "Failed");
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(map);
+        } catch (Exception e) {
+            throw new RuntimeException("Processing failed: " + e.getMessage(), e);
+        }
+        return ResponseEntity.ok("Processing completed successfully");
+    }
+
+    public ResponseEntity<?> handleCaseResponse(ResponseEntity<?> caseResponse, Map<String, Object> verifyResponseBody) {
+        if (caseResponse.getStatusCode() == HttpStatus.OK) {
+            verifyResponseBody.put("caseResponse", caseResponse.getBody());
+            verifyResponseBody.put("status", caseResponse.getStatusCode());
+            verifyResponseBody.remove("totalCount");
+            return ResponseEntity.ok(verifyResponseBody);
+        }
+        if (caseResponse.getStatusCode() == HttpStatus.BAD_REQUEST) {
+            verifyResponseBody.put("caseResponse", caseResponse.getBody());
+            verifyResponseBody.put("status", caseResponse.getStatusCode());
+            verifyResponseBody.remove("totalCount");
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(verifyResponseBody);
+        }
+        if (caseResponse.getStatusCode() == HttpStatus.INTERNAL_SERVER_ERROR) {
+            verifyResponseBody.put("caseResponse", caseResponse.getBody());
+            verifyResponseBody.put("status", caseResponse.getStatusCode());
+            verifyResponseBody.remove("totalCount");
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(verifyResponseBody);
+        }
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Unexpected case response status");
+    }
+
+}
