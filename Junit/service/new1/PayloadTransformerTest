@@ -1,0 +1,64 @@
+package com.aetna.clinical.common.util;
+
+import com.aetna.clinical.common.dto.taskrequest.ShjRequest;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+@ExtendWith(MockitoExtension.class)
+class PayloadTransformerTest {
+
+    @InjectMocks
+    private PayloadTransformer payloadTransformer;
+
+    @Test
+    void transformPayload_ValidInput() {
+        ShjRequest request = new ShjRequest();
+        // Populate request with test data
+        
+        String transactionId = "123";
+        Map<String, Object> result = payloadTransformer.transformPayload(request, transactionId);
+        
+        assertNotNull(result);
+        assertEquals("SampleDecision", result.get("__DecisionID__"));
+        assertTrue(result.containsKey("ONECMSHJOpportunityRequest"));
+    }
+
+    @Test
+    void transformShjMember_ValidInput() {
+        ShjRequest.ShjMember member = new ShjRequest.ShjMember();
+        // Populate member with test data
+        
+        Map<String, Object> result = payloadTransformer.transformShjMember(member);
+        
+        assertNotNull(result);
+        assertTrue(result.containsKey("memberIdentifier"));
+    }
+
+    @Test
+    void transformShjCase_ValidInput() {
+        ShjRequest.ShjCase shjCase = new ShjRequest.ShjCase();
+        // Populate case with test data
+        
+        Map<String, Object> result = payloadTransformer.transformShjCase(shjCase);
+        
+        assertNotNull(result);
+        assertTrue(result.containsKey("shjID"));
+    }
+
+    @Test
+    void transformShjTask_ValidInput() {
+        ShjRequest.ShjTask shjTask = new ShjRequest.ShjTask();
+        // Populate task with test data
+        
+        Map<String, Object> result = payloadTransformer.transformShjTask(shjTask);
+        
+        assertNotNull(result);
+        assertTrue(result.containsKey("careManagementStaffer"));
+    }
+}
